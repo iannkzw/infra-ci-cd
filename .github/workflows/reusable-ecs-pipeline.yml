@@ -806,34 +806,25 @@ jobs:
                 fi
               fi
               LISTENER_PORT_NUM=${LISTENER_PORT:-80}
+              
+              # Verificar se o listener existe (obrigatório - deve existir)
               EXISTING_LISTENER_JSON=$(aws elbv2 describe-listeners --load-balancer-arn "$LOAD_BALANCER_ARN" --query "Listeners[?Port==\`$LISTENER_PORT_NUM\`]" --output json 2>/dev/null | jq '.[0]' 2>/dev/null || echo "null")
-              if [ -n "$EXISTING_LISTENER_JSON" ] && [ "$EXISTING_LISTENER_JSON" != "null" ]; then
-                EXISTING_TG_ARN=$(echo "$EXISTING_LISTENER_JSON" | jq -r '.DefaultActions[0].TargetGroupArn')
-                if [ "$EXISTING_TG_ARN" = "$TARGET_GROUP_ARN" ]; then
-                  echo "✅ Listener na porta $LISTENER_PORT_NUM já existe e aponta para este target group"
-                else
-                  echo "❌ Já existe um listener na porta $LISTENER_PORT_NUM neste ALB apontando para outro target group. Use outra porta (listener_port) ou o target_group_name correspondente."
-                  exit 1
-                fi
+              if [ -z "$EXISTING_LISTENER_JSON" ] || [ "$EXISTING_LISTENER_JSON" = "null" ]; then
+                echo "❌ Listener na porta $LISTENER_PORT_NUM não existe no ALB. O listener deve existir previamente."
+                exit 1
+              fi
+              
+              LISTENER_ARN=$(echo "$EXISTING_LISTENER_JSON" | jq -r '.ListenerArn')
+              echo "✅ Listener existente encontrado: $LISTENER_ARN (porta $LISTENER_PORT_NUM)"
+              
+              # Verificar se já existe uma regra para este TG no listener
+              EXISTING_RULES=$(aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" --output json 2>/dev/null || echo '{"Rules":[]}')
+              TG_ALREADY_IN_LISTENER=$(echo "$EXISTING_RULES" | jq -r --arg tg "$TARGET_GROUP_ARN" '.Rules[] | select(.Actions[]?.TargetGroupArn == $tg) | .RuleArn' | head -1)
+              
+              if [ -n "$TG_ALREADY_IN_LISTENER" ]; then
+                echo "✅ Target group já está associado ao listener (regra: $TG_ALREADY_IN_LISTENER)"
               else
-                echo "📝 Criando listener na porta $LISTENER_PORT_NUM (${LISTENER_PROTOCOL:-HTTP})..."
-                if [ "${LISTENER_PROTOCOL}" = "HTTPS" ] && [ -n "$LISTENER_CERTIFICATE_ARN" ]; then
-                  aws elbv2 create-listener \
-                    --load-balancer-arn "$LOAD_BALANCER_ARN" \
-                    --port "$LISTENER_PORT_NUM" \
-                    --protocol HTTPS \
-                    --certificates "CertificateArn=$LISTENER_CERTIFICATE_ARN" \
-                    --default-actions "Type=forward,TargetGroupArn=$TARGET_GROUP_ARN" \
-                    --output text >/dev/null
-                else
-                  aws elbv2 create-listener \
-                    --load-balancer-arn "$LOAD_BALANCER_ARN" \
-                    --port "$LISTENER_PORT_NUM" \
-                    --protocol "${LISTENER_PROTOCOL:-HTTP}" \
-                    --default-actions "Type=forward,TargetGroupArn=$TARGET_GROUP_ARN" \
-                    --output text >/dev/null
-                fi
-                echo "✅ Listener criado"
+                echo "📝 Target group será associado ao ECS Service (registro automático via load-balancers)"
               fi
             fi
 
