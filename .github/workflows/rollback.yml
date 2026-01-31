@@ -18,8 +18,8 @@ on:
           - qa
           - sbx
           - prd
-      deployment_name:
-        description: 'Nome do deployment (mesmo do deploy)'
+      ecs_service:
+        description: 'Nome do service ECS (mesmo do deploy)'
         required: true
         type: string
       image_tag_or_sha:
@@ -41,8 +41,8 @@ on:
         description: 'Ambiente alvo'
         required: true
         type: string
-      deployment_name:
-        description: 'Nome do deployment'
+      ecs_service:
+        description: 'Nome do service ECS'
         required: true
         type: string
       image_tag_or_sha:
@@ -99,9 +99,8 @@ jobs:
         id: rollback
         env:
           CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          SERVICE: ${{ secrets.ECS_SERVICE }}
+          SERVICE: ${{ inputs.ecs_service || secrets.ECS_SERVICE }}
           TAG: ${{ inputs.image_tag_or_sha }}
-          DEPLOYMENT: ${{ inputs.deployment_name }}
         run: |
           set -e
           echo "🔄 Revertendo service $SERVICE no cluster $CLUSTER para imagem:$TAG"

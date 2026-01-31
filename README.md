@@ -4,7 +4,7 @@ Arquitetura escalável e reutilizável para deploy de aplicações .NET (APIs e 
 
 **Características:**
 - Template centralizado: um workflow reutilizável (Build → Test → Docker → ECR → ECS)
-- **Contexto** (inbound, outbound, platform): define qual ECR recebe o push; o caller passa `ecr_registry` por contexto
+- **ecs_service**: nome do service ECS e da task definition family; **ecr_repo**: nome do repositório ECR; **ecr_registry**: URL do ECR
 - **Dockerfile padrão** no repo de templates (`build/Dockerfile.api`, `build/Dockerfile.worker`) ou Dockerfile do repo da aplicação
 - Ambientes 1:1 com branch: dev, qa, sbx, prd (secrets e aprovações por ambiente)
 - Rollback manual com workflow dedicado e playbook
@@ -27,8 +27,6 @@ github-ecs/
 ├── build/
 │   ├── Dockerfile.api                  # Dockerfile genérico para APIs (uso com use_default_dockerfile=true)
 │   └── Dockerfile.worker               # Dockerfile genérico para Workers
-├── workflows/
-│   └── dotnet-ecs-deploy.yml           # Workflow legado (DEV/PRD em 2 jobs)
 ├── example/                             # Uma pasta de exemplo
 │   ├── README.md                       # Como usar os exemplos
 │   ├── .github/workflows/
@@ -44,17 +42,13 @@ github-ecs/
 
 ---
 
-## Contexto (inbound, outbound, platform)
+## ecs_service, ecr_repo e ecr_registry
 
-O pipeline recebe um **contexto** (`inbound`, `outbound` ou `platform`) e o **ecr_registry** (URL do ECR) para esse contexto. O **nome do repositório ECR** é sempre o próprio contexto (ex.: repo `platform` para contexto platform). Assim, cada aplicação faz push para o registry e repositório corretos.
+- **ecs_service**: nome do **service ECS** e da **task definition family** (ex.: `inbound-nfe-api-envioxml`).
+- **ecr_repo**: nome do **repositório ECR** onde a imagem será enviada (ex.: `inbound` ou o mesmo do service). O repositório ECR deve existir com esse nome (ou ser criado antes do primeiro push).
+- **ecr_registry**: URL do registry ECR (ex.: `123456789012.dkr.ecr.us-east-1.amazonaws.com`). O caller passa via variável do environment, ex.: `ecr_registry: ${{ vars.ECR_REGISTRY }}`.
 
-| Contexto   | Uso típico | Variável no environment (ex.) | Repositório ECR |
-|------------|------------|-------------------------------|------------------|
-| `inbound`  | Serviços de entrada | `ECR_REGISTRY_INBOUND` | `inbound` |
-| `outbound` | Serviços de saída  | `ECR_REGISTRY_OUTBOUND` | `outbound` |
-| `platform` | Serviços de plataforma | `ECR_REGISTRY_PLATFORM` | `platform` |
-
-No workflow da aplicação, passe `context` e `ecr_registry: ${{ vars.ECR_REGISTRY_INBOUND }}` (ou a variável do contexto desejado).
+A imagem é enviada para `{ecr_registry}/{ecr_repo}:{tag}`.
 
 ---
 
@@ -83,7 +77,7 @@ Cada branch usa apenas os secrets do environment correspondente.
 1. **Build**: Restore .NET (com cache NuGet).
 2. **Test**: `dotnet test`; falha interrompe o pipeline.
 3. **Docker Build**: Imagem com Dockerfile padrão (build/) ou do repo da app; build-arg `PROJECT_NAME` quando uso padrão.
-4. **Push ECR**: Tags `sha`, `branch`, `context` e timestamp; push para o registry informado (`ecr_registry`).
+4. **Push ECR**: Tags `sha`, `branch` e timestamp; push para `{ecr_registry}/{ecr_repo}:{tag}`.
 5. **Deploy ECS**:
    - **Service já existe**: reutiliza a task definition atual, troca apenas a **imagem** (e o **environment** do container, se `container_environment` for informado); registra nova revisão e faz `update-service --force-new-deployment`.
    - **Service não existe**: monta a task definition a partir dos inputs, registra, cria o service (rede, LB para API, etc.) e faz `wait services-stable`.
@@ -98,8 +92,8 @@ Cada branch usa apenas os secrets do environment correspondente.
 
 Crie os environments `dev`, `qa`, `sbx`, `prd` e, em cada um:
 
-- **Environment variables**: `ECR_REGISTRY_INBOUND`, `ECR_REGISTRY_OUTBOUND`, `ECR_REGISTRY_PLATFORM` (URL do registry ECR por contexto, ex.: `123456789.dkr.ecr.us-east-1.amazonaws.com`).
-- **Environment secrets**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `ECS_CLUSTER`, `ECS_SERVICE`, `ECS_TASK_EXECUTION_ROLE_ARN`.
+- **Environment variables**: `ECR_REGISTRY` (URL do registry ECR, ex.: `123456789.dkr.ecr.us-east-1.amazonaws.com`).
+- **Environment secrets**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `ECS_CLUSTER`, `ECS_TASK_EXECUTION_ROLE_ARN`.
 
 Detalhes em [.github/ENVIRONMENTS.md](.github/ENVIRONMENTS.md).
 
@@ -114,8 +108,8 @@ Substitua `SEU_ORG/infra-ci-cd` pelo repositório que contém os workflows.
 
 ### 3. Pré-requisitos na AWS
 
-- **ECR**: Repositório com nome igual ao **context** (ex.: `inbound`, `outbound` ou `platform`). A imagem é tagueada com sha, branch, context e timestamp.
-- **Task Definition** e **ECS Service**: configurados para a imagem no ECR do contexto.
+- **ECR**: Repositório com o nome **ecr_repo** (ex.: `inbound`). A imagem é tagueada com sha, branch e timestamp.
+- **Task Definition** e **ECS Service**: nome = **ecs_service**; imagem em `{ecr_registry}/{ecr_repo}:{tag}`.
 
 ### 4. Testar
 
@@ -138,10 +132,10 @@ Push nas branches `dev`, `qa`, `sbx` ou `prd`; sbx e prd exigirão aprovação s
 
 | Input | Descrição |
 |-------|-----------|
-| `deployment_name` | Nome do deployment (ECR repo e ECS service) |
+| `ecs_service` | Nome do service ECS e da task definition family (ex.: `inbound-nfe-api-envioxml`) |
 | `service_type` | `api` ou `worker` |
-| `context` | `inbound`, `outbound` ou `platform` (define qual ECR usar) |
-| `ecr_registry` | URL do registry ECR para este contexto (ex.: vars.ECR_REGISTRY_INBOUND) |
+| `ecr_repo` | Nome do repositório ECR (ex.: `inbound` ou o mesmo do service) |
+| `ecr_registry` | URL do registry ECR (ex.: `vars.ECR_REGISTRY`) |
 | `environment` | `dev`, `qa`, `sbx` ou `prd` (caller passa `github.ref_name`) |
 
 ### Inputs opcionais
@@ -153,7 +147,7 @@ Push nas branches `dev`, `qa`, `sbx` ou `prd`; sbx e prd exigirão aprovação s
 | `project_name` | Nome do .csproj (obrigatório quando use_default_dockerfile=true) |
 | `dockerfile_path` | Caminho do Dockerfile no repo da app (quando use_default_dockerfile=false) |
 | `dotnet_version`, `working_directory`, `aws_region` | 8.0, src, us-east-1 |
-| `ecs_cluster`, `ecs_service` | Usam secrets do environment quando vazios; nome do repositório ECR = `context` (inbound, outbound ou platform) |
+| `ecs_cluster` | Nome do cluster (vazio = secret `ECS_CLUSTER`) |
 | **Task definition (cenário real)** | |
 | `container_environment` | JSON array `[{"name":"X","value":"Y"}]` de variáveis de ambiente no container |
 | `container_secrets` | JSON array `[{"name":"X","valueFrom":"arn:aws:secretsmanager:..."}]` (Secrets Manager) |
@@ -199,8 +193,8 @@ O pipeline **suporta o cenário real ECS**: task definition com **environment**,
 ## Boas práticas
 
 - Segregação de ambientes: um environment por branch; secrets por environment.
-- Contexto + `ecr_registry`: um ECR por contexto (inbound/outbound/platform).
+- **ecs_service** = service e task definition; **ecr_repo** = repositório ECR; **ecr_registry** = URL do ECR.
 - Dockerfile padrão em `build/` para padronizar; opção de Dockerfile customizado por app.
 - GitHub Environments com Required reviewers em sbx e prd.
-- Tags ECR: sha, branch, context e timestamp.
+- Tags ECR: sha, branch e timestamp.
 - Zero secrets em plain text nos YAMLs.

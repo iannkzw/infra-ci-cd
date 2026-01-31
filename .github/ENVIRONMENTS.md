@@ -1,6 +1,6 @@
 # Configuração de GitHub Environments e Secrets
 
-Cada ambiente (dev, qa, sbx, prd) deve ter seus próprios **Secrets** e **Variables** no GitHub. O pipeline usa o environment definido pela branch e o **contexto** (inbound, outbound, platform) para escolher o ECR via variável.
+Cada ambiente (dev, qa, sbx, prd) deve ter seus próprios **Secrets** e **Variables** no GitHub. O pipeline usa o environment definido pela branch; **ecs_service** = service ECS e task definition; **ecr_repo** = nome do repositório ECR; **ecr_registry** vem da variável do environment.
 
 ## Mapeamento branch → environment
 
@@ -11,15 +11,12 @@ Cada ambiente (dev, qa, sbx, prd) deve ter seus próprios **Secrets** e **Variab
 | `sbx` | `sbx` | Sim (Required reviewers) |
 | `prd` | `prd` | Sim (Required reviewers) |
 
-## Contexto e ECR
+## ecs_service, ecr_repo e ECR
 
-O pipeline recebe `context` (inbound, outbound ou platform) e `ecr_registry`. O **nome do repositório ECR** é sempre o próprio contexto (inbound, outbound ou platform). O caller passa o registry a partir das variáveis do environment:
+O pipeline recebe **ecs_service** (nome do service ECS e da task definition family), **ecr_repo** (nome do repositório ECR) e **ecr_registry** (URL do ECR). A imagem é enviada para `{ecr_registry}/{ecr_repo}:{tag}`.
 
-- **inbound**: `vars.ECR_REGISTRY_INBOUND` → push no repositório `inbound`
-- **outbound**: `vars.ECR_REGISTRY_OUTBOUND` → push no repositório `outbound`
-- **platform**: `vars.ECR_REGISTRY_PLATFORM` → push no repositório `platform`
-
-Assim, cada ambiente pode ter um registry por contexto (ou o mesmo registry para todos, se for o caso).
+- O caller passa `ecs_service` (ex.: `inbound-nfe-api-envioxml`), `ecr_repo` (ex.: `inbound`) e `ecr_registry: ${{ vars.ECR_REGISTRY }}`.
+- O repositório ECR deve existir com o nome **ecr_repo** (ou ser criado antes do primeiro push).
 
 ## Como configurar
 
@@ -37,11 +34,7 @@ Em cada environment, em **Environment variables**:
 
 | Variable | Obrigatório | Descrição |
 |----------|-------------|-----------|
-| `ECR_REGISTRY_INBOUND` | Sim* | URL do registry ECR para contexto inbound (ex.: `123456789.dkr.ecr.us-east-1.amazonaws.com`) |
-| `ECR_REGISTRY_OUTBOUND` | Sim* | URL do registry ECR para contexto outbound |
-| `ECR_REGISTRY_PLATFORM` | Sim* | URL do registry ECR para contexto platform |
-
-\* Pode usar o mesmo valor nos três se todos os contextos usarem o mesmo registry.
+| `ECR_REGISTRY` | Sim | URL do registry ECR (ex.: `123456789.dkr.ecr.us-east-1.amazonaws.com`) |
 
 ### 3. Environment secrets (por ambiente)
 
@@ -52,10 +45,9 @@ Em cada environment, em **Environment secrets**:
 | `AWS_ACCESS_KEY_ID` | Sim | Access Key da conta/role AWS do ambiente |
 | `AWS_SECRET_ACCESS_KEY` | Sim | Secret Key correspondente |
 | `ECS_CLUSTER` | Não* | Nome do cluster ECS (ex.: `cluster-dev`); pode ser passado como input `ecs_cluster` |
-| `ECS_SERVICE` | Não* | Nome do service ECS (ex.: `inbound-nfe-api-envioxml`); pode ser passado como input `ecs_service` |
 | `ECS_TASK_EXECUTION_ROLE_ARN` | Não* | ARN da role de execução da task; pode ser passado como input `ecs_task_execution_role_arn` |
 
-\* Para o primeiro deploy (service ainda não existe), informe **cluster** e **service** via inputs ou secrets. A **role de execução** é obrigatória em todo deploy (input ou secret).
+\* Para o primeiro deploy (service ainda não existe), informe **cluster** via input ou secret. O **ecs_service** é sempre passado como input. A **role de execução** é obrigatória em todo deploy (input ou secret).
 
 ### 4. Configuração do serviço ECS (inputs do workflow)
 
@@ -66,9 +58,10 @@ O pipeline suporta criar ou atualizar o service ECS:
 
 **Obrigatório para todo deploy:**
 
+- `ecs_service` (nome do service ECS e da task definition)
+- `ecr_repo` (nome do repositório ECR)
 - `ecs_task_execution_role_arn` (ou secret `ECS_TASK_EXECUTION_ROLE_ARN`)
 - `ecs_cluster` (ou secret `ECS_CLUSTER`)
-- Nome do service: `ecs_service` ou `deployment_name` (ou secret `ECS_SERVICE`)
 
 **Para criar o service (primeiro deploy):**
 
@@ -108,7 +101,7 @@ O pipeline suporta criar ou atualizar o service ECS:
 ### 5. Repositório de templates (este repo)
 
 - Os **secrets** e **variables** são configurados no **repositório da aplicação** (ou na organização) que chama o workflow.
-- O job do caller usa `environment: ${{ github.ref_name }}` e `secrets: inherit`; o caller passa `ecr_registry: ${{ vars.ECR_REGISTRY_INBOUND }}` (ou o contexto desejado).
+- O job do caller usa `environment: ${{ github.ref_name }}` e `secrets: inherit`; o caller passa `ecs_service`, `ecr_repo` e `ecr_registry: ${{ vars.ECR_REGISTRY }}`.
 
 ### 6. Resumo de segurança
 

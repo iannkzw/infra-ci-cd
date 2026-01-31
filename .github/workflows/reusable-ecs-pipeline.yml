@@ -3,20 +3,20 @@ name: Reusable ECS Pipeline
 on:
   workflow_call:
     inputs:
-      deployment_name:
-        description: 'Nome do deployment (ECS service)'
+      ecs_service:
+        description: 'Nome do service ECS e da task definition family (ex.: inbound-nfe-api-envioxml)'
         required: true
         type: string
       service_type:
         description: 'Tipo de serviço: api ou worker'
         required: true
         type: string
-      context:
-        description: 'Contexto: inbound, outbound ou platform (define qual ECR usar)'
+      ecr_repo:
+        description: 'Nome do repositório ECR onde a imagem será enviada (ex.: inbound ou inbound-nfe-api-envioxml)'
         required: true
         type: string
       ecr_registry:
-        description: 'URL do registry ECR para este contexto (ex.: vars.ECR_REGISTRY_INBOUND)'
+        description: 'URL do registry ECR (ex.: vars.ECR_REGISTRY ou 123456789012.dkr.ecr.us-east-1.amazonaws.com)'
         required: true
         type: string
       environment:
@@ -65,11 +65,6 @@ on:
         default: 'us-east-1'
       ecs_cluster:
         description: 'Nome do cluster ECS (vazio = usa secret ECS_CLUSTER)'
-        required: false
-        type: string
-        default: ''
-      ecs_service:
-        description: 'Nome do service ECS (vazio = deployment_name)'
         required: false
         type: string
         default: ''
@@ -235,8 +230,6 @@ on:
         required: true
       ECS_CLUSTER:
         required: false
-      ECS_SERVICE:
-        required: false
       ECS_TASK_EXECUTION_ROLE_ARN:
         required: false
       REPO_ACCESS_TOKEN:
@@ -268,7 +261,7 @@ jobs:
       task_definition_arn: ${{ steps.ecs-deploy.outputs.task_definition_arn }}
 
     steps:
-      - name: Validar ambiente e contexto
+      - name: Validar ambiente e service
         id: validate
         run: |
           ENV="${{ inputs.environment }}"
@@ -276,17 +269,19 @@ jobs:
             dev|qa|sbx|prd) echo "✅ Ambiente válido: $ENV" ;;
             *) echo "❌ Ambiente inválido: $ENV"; exit 1 ;;
           esac
-          CTX="${{ inputs.context }}"
-          case "$CTX" in
-            inbound|outbound|platform) echo "✅ Contexto válido: $CTX" ;;
-            *) echo "❌ Contexto inválido: $CTX"; exit 1 ;;
-          esac
-          # Nome do repositório ECR = context (inbound, outbound ou platform)
-          echo "ecr_repository=${CTX}" >> $GITHUB_OUTPUT
+          SERVICE="${{ inputs.ecs_service }}"
+          ECR_REPO="${{ inputs.ecr_repo }}"
+          if [ -z "$SERVICE" ]; then
+            echo "❌ ecs_service é obrigatório"
+            exit 1
+          fi
+          if [ -z "$ECR_REPO" ]; then
+            echo "❌ ecr_repo é obrigatório"
+            exit 1
+          fi
+          echo "ecr_repository=${ECR_REPO}" >> $GITHUB_OUTPUT
           echo "ecr_registry=${{ inputs.ecr_registry }}" >> $GITHUB_OUTPUT
-          SERVICE_NAME="${{ inputs.ecs_service }}"
-          [ -z "$SERVICE_NAME" ] && SERVICE_NAME="${{ inputs.deployment_name }}"
-          echo "ecs_service=${SERVICE_NAME}" >> $GITHUB_OUTPUT
+          echo "ecs_service=${SERVICE}" >> $GITHUB_OUTPUT
 
       - name: Checkout aplicação
         uses: actions/checkout@v4
@@ -361,22 +356,19 @@ jobs:
         env:
           ECR_REPO: ${{ steps.validate.outputs.ecr_repository }}
           REGISTRY: ${{ steps.validate.outputs.ecr_registry }}
-          CONTEXT: ${{ inputs.context }}
         run: |
           FULL_IMAGE="${REGISTRY}/${ECR_REPO}:${{ github.sha }}"
           docker tag ci-build "$FULL_IMAGE"
           docker push "$FULL_IMAGE"
           docker tag ci-build "${REGISTRY}/${ECR_REPO}:${{ github.ref_name }}"
           docker push "${REGISTRY}/${ECR_REPO}:${{ github.ref_name }}"
-          docker tag ci-build "${REGISTRY}/${ECR_REPO}:${CONTEXT}"
-          docker push "${REGISTRY}/${ECR_REPO}:${CONTEXT}"
           TIMESTAMP_TAG="$(date -u +%Y%m%d-%H%M%S)"
           docker tag ci-build "${REGISTRY}/${ECR_REPO}:${TIMESTAMP_TAG}"
           docker push "${REGISTRY}/${ECR_REPO}:${TIMESTAMP_TAG}"
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ci-build | cut -d'@' -f2)
           echo "image_digest=${DIGEST}" >> $GITHUB_OUTPUT
           echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "✅ Pushed $FULL_IMAGE (context: $CONTEXT)"
+          echo "✅ Pushed $FULL_IMAGE"
 
       - name: Registrar nova Task Definition e Deploy (criar ou atualizar service)
         id: ecs-deploy
@@ -419,7 +411,7 @@ jobs:
           FULL_IMAGE="${REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
           echo "🖼️ Imagem: $FULL_IMAGE"
           if [ -z "$CLUSTER" ] || [ -z "$SERVICE" ]; then
-            echo "❌ ECS cluster e service são obrigatórios (inputs ecs_cluster/ecs_service ou secrets ECS_CLUSTER/ECS_SERVICE)"
+            echo "❌ ECS cluster e ecs_service são obrigatórios (ecs_cluster ou secret ECS_CLUSTER)"
             exit 1
           fi
 
@@ -634,7 +626,7 @@ jobs:
           cat << EOF > .deploys/deploy.json
           {
             "environment": "${{ inputs.environment }}",
-            "deployment_name": "${{ inputs.deployment_name }}",
+            "ecs_service": "${{ inputs.ecs_service }}",
             "image_digest": "${{ steps.ecr-push.outputs.image_digest }}",
             "image_tag": "${{ steps.ecr-push.outputs.image_tag }}",
             "task_definition_arn": "${{ steps.ecs-deploy.outputs.task_definition_arn }}",
@@ -652,7 +644,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: deploy-${{ inputs.environment }}-${{ inputs.deployment_name }}-${{ github.run_id }}
+          name: deploy-${{ inputs.environment }}-${{ inputs.ecs_service }}-${{ github.run_id }}
           path: .deploys
 
       - name: Health check (opcional)

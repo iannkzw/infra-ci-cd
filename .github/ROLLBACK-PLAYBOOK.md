@@ -34,7 +34,7 @@ flowchart TD
 2. Clique em **Run workflow**.
 3. Preencha:
    - **environment**: dev | qa | sbx | prd
-   - **deployment_name**: nome do deployment (ex.: `minha-api`)
+   - **ecs_service**: nome do service ECS (ex.: `inbound-nfe-api-envioxml`)
    - **image_tag_or_sha**: tag ou SHA da imagem para a qual reverter (ex.: `abc1234` ou `20250130-143022`)
    - **reason**: motivo do rollback (para auditoria)
 4. Para **prd**, o GitHub exibirá a fila de aprovação do environment; um reviewer deve aprovar.
@@ -42,7 +42,7 @@ flowchart TD
 
 ## Como consultar o histórico
 
-- **Artifacts**: Em cada run de deploy, baixe o artifact `deploy-{env}-{deployment_name}-{run_id}` e abra `deploy.json` para ver a versão deployada (digest, tag, task_definition_arn, service_arn, commit, timestamp).
+- **Artifacts**: Em cada run de deploy, baixe o artifact `deploy-{env}-{ecs_service}-{run_id}` e abra `deploy.json` para ver a versão deployada (digest, tag, task_definition_arn, service_arn, commit, timestamp).
 - **ECR**: No console AWS ECR, liste as imagens do repositório pela tag (sha ou timestamp) para confirmar a imagem disponível para rollback.
 - O pipeline gera **nova task definition a cada deploy** (com a imagem do build); o rollback usa o mesmo padrão: registra uma nova revisão da task definition com a imagem desejada e atualiza o service.
 
