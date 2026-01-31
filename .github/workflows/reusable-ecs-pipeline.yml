@@ -520,7 +520,10 @@ jobs:
               fi
             fi
             echo "📝 Registrando nova revisão da task definition (imagem + environment se informado)..."
-            NEW_TASK_ARN=$(echo "$TASK_DEF_JSON" | aws ecs register-task-definition --cli-input-json file:///dev/stdin --query 'taskDefinition.taskDefinitionArn' --output text)
+            TASK_DEF_FILE=$(mktemp)
+            echo "$TASK_DEF_JSON" > "$TASK_DEF_FILE"
+            NEW_TASK_ARN=$(aws ecs register-task-definition --cli-input-json "file://${TASK_DEF_FILE}" --query 'taskDefinition.taskDefinitionArn' --output text)
+            rm -f "$TASK_DEF_FILE"
             echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
             echo "✅ Task definition: $NEW_TASK_ARN (reutilizada; imagem e env atualizados)"
           else
@@ -674,7 +677,10 @@ jobs:
             fi
 
             echo "📝 Registrando nova revisão da task definition (criação do zero)..."
-            NEW_TASK_ARN=$(echo "$TASK_DEF_JSON" | aws ecs register-task-definition --cli-input-json file:///dev/stdin --query 'taskDefinition.taskDefinitionArn' --output text)
+            TASK_DEF_FILE=$(mktemp)
+            echo "$TASK_DEF_JSON" > "$TASK_DEF_FILE"
+            NEW_TASK_ARN=$(aws ecs register-task-definition --cli-input-json "file://${TASK_DEF_FILE}" --query 'taskDefinition.taskDefinitionArn' --output text)
+            rm -f "$TASK_DEF_FILE"
             echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
             echo "✅ Task definition: $NEW_TASK_ARN"
           fi
