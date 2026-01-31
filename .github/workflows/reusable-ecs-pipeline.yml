@@ -775,7 +775,8 @@ jobs:
               fi
               if [ -z "$TARGET_GROUP_ARN" ]; then
                 echo "📝 Criando target group: $TG_NAME (porta $TG_PORT_NUM, VPC $VPC_ID)..."
-                TARGET_GROUP_ARN=$(aws elbv2 create-target-group \
+                
+                TG_CREATE_OUTPUT=$(aws elbv2 create-target-group \
                   --name "$TG_NAME" \
                   --protocol "${TG_PROTOCOL:-HTTP}" \
                   --port "$TG_PORT_NUM" \
@@ -783,13 +784,26 @@ jobs:
                   --target-type ip \
                   --health-check-path "${TG_HEALTH_CHECK_PATH:-/}" \
                   --health-check-protocol "${TG_HEALTH_CHECK_PROTOCOL:-HTTP}" \
-                  --deregistration-delay-seconds "$TG_DEREG" \
-                  --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
-                if [ -z "$TARGET_GROUP_ARN" ] || [ "$TARGET_GROUP_ARN" = "None" ]; then
-                  echo "❌ Falha ao criar target group"
+                  --query 'TargetGroups[0].TargetGroupArn' --output text 2>&1) || true
+                
+                # Verificar se o output é um ARN válido
+                if echo "$TG_CREATE_OUTPUT" | grep -q "^arn:aws:"; then
+                  TARGET_GROUP_ARN="$TG_CREATE_OUTPUT"
+                else
+                  echo "❌ Falha ao criar target group. Erro:"
+                  echo "$TG_CREATE_OUTPUT"
                   exit 1
                 fi
+                
                 echo "✅ Target group criado: $TARGET_GROUP_ARN"
+                
+                # Configurar deregistration delay (é um atributo, não parâmetro do create)
+                if [ -n "$TG_DEREG" ] && [ "$TG_DEREG" != "300" ]; then
+                  echo "📝 Configurando deregistration delay: ${TG_DEREG}s"
+                  aws elbv2 modify-target-group-attributes \
+                    --target-group-arn "$TARGET_GROUP_ARN" \
+                    --attributes "Key=deregistration_delay.timeout_seconds,Value=$TG_DEREG"
+                fi
               fi
               LISTENER_PORT_NUM=${LISTENER_PORT:-80}
               EXISTING_LISTENER_JSON=$(aws elbv2 describe-listeners --load-balancer-arn "$LOAD_BALANCER_ARN" --query "Listeners[?Port==\`$LISTENER_PORT_NUM\`]" --output json 2>/dev/null | jq '.[0]' 2>/dev/null || echo "null")
