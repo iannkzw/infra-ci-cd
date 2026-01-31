@@ -533,28 +533,63 @@ jobs:
             LOG_GROUP="/ecs/${TASK_FAMILY}"
             PORT_NUM=$(echo "$CONTAINER_PORT" | grep -E '^[0-9]+$' || echo "80")
 
+            # Validar CONTAINER_ENVIRONMENT se informado
+            if [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ]; then
+              if ! echo "$CONTAINER_ENVIRONMENT" | jq empty 2>/dev/null; then
+                echo "❌ CONTAINER_ENVIRONMENT contém JSON inválido: $CONTAINER_ENVIRONMENT"
+                exit 1
+              fi
+              echo "✅ CONTAINER_ENVIRONMENT validado"
+            fi
+
+            # Validar CONTAINER_SECRETS se informado
+            if [ -n "$CONTAINER_SECRETS" ] && [ "$CONTAINER_SECRETS" != "[]" ]; then
+              if ! echo "$CONTAINER_SECRETS" | jq empty 2>/dev/null; then
+                echo "❌ CONTAINER_SECRETS contém JSON inválido: $CONTAINER_SECRETS"
+                exit 1
+              fi
+              echo "✅ CONTAINER_SECRETS validado"
+            fi
+
             PORT_MAPPING=$(jq -n \
               --arg name "${CONTAINER_NAME}-${PORT_NUM}-tcp" \
               --argjson port "$PORT_NUM" \
-              --arg appProtocol "$PORT_APP_PROTOCOL" \
               '{
                 name: $name,
                 containerPort: $port,
                 hostPort: $port,
                 protocol: "tcp"
-              } | if $appProtocol != "" then . + {"appProtocol": $appProtocol} else . end')
+              }')
 
+            # Adicionar appProtocol se informado
+            if [ -n "$PORT_APP_PROTOCOL" ] && [ "$PORT_APP_PROTOCOL" != "" ]; then
+              PORT_MAPPING=$(echo "$PORT_MAPPING" | jq --arg appProtocol "$PORT_APP_PROTOCOL" '. + {appProtocol: $appProtocol}')
+            fi
+
+            # Construir LOG_OPTS base
             LOG_OPTS=$(jq -n \
               --arg lg "$LOG_GROUP" \
               --arg region "$AWS_REGION" \
-              --arg mode "$AWSLOGS_MODE" \
-              --arg createGroup "$AWSLOGS_CREATE_GROUP" \
-              --arg maxBuf "$AWSLOGS_MAX_BUFFER" \
               '{
                 "awslogs-group": $lg,
                 "awslogs-region": $region,
                 "awslogs-stream-prefix": "ecs"
-              } | if $mode != "" then . + {"mode": $mode} else . end | if $createGroup != "" then . + {"awslogs-create-group": $createGroup} else . end | if $maxBuf != "" then . + {"max-buffer-size": $maxBuf} else . end')
+              }')
+
+            # Adicionar mode se informado
+            if [ -n "$AWSLOGS_MODE" ] && [ "$AWSLOGS_MODE" != "" ]; then
+              LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg mode "$AWSLOGS_MODE" '. + {mode: $mode}')
+            fi
+
+            # Adicionar awslogs-create-group se informado
+            if [ -n "$AWSLOGS_CREATE_GROUP" ] && [ "$AWSLOGS_CREATE_GROUP" != "" ]; then
+              LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg createGroup "$AWSLOGS_CREATE_GROUP" '. + {"awslogs-create-group": $createGroup}')
+            fi
+
+            # Adicionar max-buffer-size se informado
+            if [ -n "$AWSLOGS_MAX_BUFFER" ] && [ "$AWSLOGS_MAX_BUFFER" != "" ]; then
+              LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg maxBuf "$AWSLOGS_MAX_BUFFER" '. + {"max-buffer-size": $maxBuf}')
+            fi
 
             CONTAINER_DEF=$(jq -n \
               --arg name "$CONTAINER_NAME" \
@@ -580,15 +615,13 @@ jobs:
               fi
             fi
 
+            # Construir JSON base
             TASK_DEF_JSON=$(jq -n \
               --arg family "$TASK_FAMILY" \
               --arg execRole "$TASK_EXEC_ROLE" \
-              --arg taskRole "$TASK_ROLE" \
               --arg cpu "${{ inputs.task_cpu || '256' }}" \
               --arg memory "${{ inputs.task_memory || '512' }}" \
               --argjson container "$CONTAINER_DEF" \
-              --arg runtimeCpu "$RUNTIME_CPU" \
-              --arg runtimeOs "$RUNTIME_OS" \
               '{
                 family: $family,
                 networkMode: "awsvpc",
@@ -597,7 +630,48 @@ jobs:
                 memory: $memory,
                 executionRoleArn: $execRole,
                 containerDefinitions: [$container]
-              } | if $taskRole != "" then . + {taskRoleArn: $taskRole} else . end | if ($runtimeCpu != "" or $runtimeOs != "") then . + {runtimePlatform: ({} | if $runtimeCpu != "" then . + {cpuArchitecture: $runtimeCpu} else . end | if $runtimeOs != "" then . + {operatingSystemFamily: $runtimeOs} else . end)} else . end')
+              }')
+
+            # Adicionar taskRole se informado
+            if [ -n "$TASK_ROLE" ] && [ "$TASK_ROLE" != "" ]; then
+              TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --arg taskRole "$TASK_ROLE" '. + {taskRoleArn: $taskRole}')
+            fi
+
+            # Adicionar runtimePlatform se informado
+            if [ -n "$RUNTIME_CPU" ] || [ -n "$RUNTIME_OS" ]; then
+              RUNTIME_PLATFORM=$(jq -n '{}')
+              
+              if [ -n "$RUNTIME_CPU" ] && [ "$RUNTIME_CPU" != "" ]; then
+                RUNTIME_PLATFORM=$(echo "$RUNTIME_PLATFORM" | jq --arg cpu "$RUNTIME_CPU" '. + {cpuArchitecture: $cpu}')
+              fi
+              
+              if [ -n "$RUNTIME_OS" ] && [ "$RUNTIME_OS" != "" ]; then
+                RUNTIME_PLATFORM=$(echo "$RUNTIME_PLATFORM" | jq --arg os "$RUNTIME_OS" '. + {operatingSystemFamily: $os}')
+              fi
+              
+              TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson platform "$RUNTIME_PLATFORM" '. + {runtimePlatform: $platform}')
+            fi
+
+            # DEBUG: Validar JSONs antes do registro
+            echo "======================== DEBUG START ========================"
+            echo "📝 PORT_MAPPING:"
+            echo "$PORT_MAPPING" | jq . 2>&1 || echo "❌ PORT_MAPPING is invalid JSON"
+            echo ""
+            echo "📝 LOG_OPTS:"
+            echo "$LOG_OPTS" | jq . 2>&1 || echo "❌ LOG_OPTS is invalid JSON"
+            echo ""
+            echo "📝 CONTAINER_DEF:"
+            echo "$CONTAINER_DEF" | jq . 2>&1 || echo "❌ CONTAINER_DEF is invalid JSON"
+            echo ""
+            echo "📝 TASK_DEF_JSON:"
+            echo "$TASK_DEF_JSON" | jq . 2>&1 || echo "❌ TASK_DEF_JSON is invalid JSON"
+            echo "======================== DEBUG END ========================"
+
+            # Validação com exit se inválido
+            if ! echo "$TASK_DEF_JSON" | jq empty 2>/dev/null; then
+              echo "❌ TASK_DEF_JSON contém JSON inválido - abortando deployment"
+              exit 1
+            fi
 
             echo "📝 Registrando nova revisão da task definition (criação do zero)..."
             NEW_TASK_ARN=$(echo "$TASK_DEF_JSON" | aws ecs register-task-definition --cli-input-json file:///dev/stdin --query 'taskDefinition.taskDefinitionArn' --output text)
