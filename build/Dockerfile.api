@@ -3,7 +3,7 @@
 # Build context: raiz do repositório da aplicação.
 # ARG PROJECT_NAME: nome do projeto .csproj (ex.: Inbound.Nfe.Api.EnvioXml)
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
 WORKDIR /src
 
 COPY src/*.sln ./
@@ -15,7 +15,7 @@ COPY src/. .
 ARG PROJECT_NAME
 RUN dotnet publish "${PROJECT_NAME}/${PROJECT_NAME}.csproj" -c Release -o /app/publish --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:7.0
 WORKDIR /app
 
 RUN adduser --disabled-password --gecos '' appuser && chown -R appuser /app
