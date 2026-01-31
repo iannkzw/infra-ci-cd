@@ -13,11 +13,11 @@ Cada ambiente (dev, qa, sbx, prd) deve ter seus próprios **Secrets** e **Variab
 
 ## Contexto e ECR
 
-O pipeline recebe `context` (inbound, outbound ou platform) e `ecr_registry`. O caller passa o registry a partir das variáveis do environment:
+O pipeline recebe `context` (inbound, outbound ou platform) e `ecr_registry`. O **nome do repositório ECR** é sempre o próprio contexto (inbound, outbound ou platform). O caller passa o registry a partir das variáveis do environment:
 
-- **inbound**: `vars.ECR_REGISTRY_INBOUND`
-- **outbound**: `vars.ECR_REGISTRY_OUTBOUND`
-- **platform**: `vars.ECR_REGISTRY_PLATFORM`
+- **inbound**: `vars.ECR_REGISTRY_INBOUND` → push no repositório `inbound`
+- **outbound**: `vars.ECR_REGISTRY_OUTBOUND` → push no repositório `outbound`
+- **platform**: `vars.ECR_REGISTRY_PLATFORM` → push no repositório `platform`
 
 Assim, cada ambiente pode ter um registry por contexto (ou o mesmo registry para todos, se for o caso).
 
@@ -80,11 +80,28 @@ O pipeline suporta criar ou atualizar o service ECS:
 - `load_balancer_target_group_arn`: ARN do target group do ALB (o path, ex. `/api/nfe/*`, é configurado na listener rule do ALB que aponta para esse target group)
 - `container_name`: nome do container na task definition (default: `app`)
 - `container_port`: porta exposta (default: `80`)
-- Opcional: `load_balancer_name`, `listener_path_pattern` (referência/documentação; ex.: LB invoisys.com.br, path `/api/nfe/*`,`/api/cte/*`)
 
 **Worker (service_type=worker):** não usa Load Balancer; não informe `load_balancer_target_group_arn`.
 
-**Outros inputs opcionais:** `ecs_task_role_arn`, `task_cpu`, `task_memory`, `vpc_id`, `assign_public_ip`, `desired_count`.
+**Task definition (cenário real ECS):**
+
+- `container_environment`: JSON array de variáveis de ambiente no container (ex.: `[{"name":"INVOISYS_ENV","value":"prd"}]`). Use variáveis do environment ou secret para não expor valores sensíveis no YAML.
+- `container_secrets`: JSON array de referências a Secrets Manager (ex.: `[{"name":"ConnectionStrings__PostgreSql","valueFrom":"arn:aws:secretsmanager:..."}]`).
+- `runtime_cpu_architecture`, `runtime_os_family`: ex.: X86_64, LINUX (compatível com task definitions Fargate).
+- `awslogs_mode`, `awslogs_create_group`, `awslogs_max_buffer_size`: opções de log (ex.: non-blocking, true, 25m).
+- `port_mapping_app_protocol`: ex.: http.
+
+**Service (cenário real ECS):**
+
+- `enable_zone_rebalancing`: ativar rebalanceamento de zonas de disponibilidade.
+- `health_check_grace_period_seconds`: período de carência do health check (segundos).
+- `deployment_circuit_breaker_enable`, `deployment_circuit_breaker_rollback`: disjuntor de implantação e rollback automático.
+- `capacity_provider_strategy`: ex.: `FARGATE:0:1,FARGATE_SPOT:0:4` (provider:base:weight). Se informado, o create-service usa capacity provider strategy em vez de apenas launch-type FARGATE; update-service não altera essa configuração.
+- `platform_version`: ex.: 1.4.0.
+- `enable_execute_command`: ECS Exec (comandos interativos no container).
+- `deployment_minimum_healthy_percent`, `deployment_maximum_percent`: ex.: 100, 200.
+
+**Outros inputs opcionais:** `ecs_task_role_arn`, `task_cpu`, `task_memory`, `assign_public_ip`, `desired_count`.
 
 **Logs:** o pipeline usa o log group `/ecs/<nome-do-service>`. Crie o log group no CloudWatch (ou garanta que a role de execução tenha permissão `logs:CreateLogGroup`).
 

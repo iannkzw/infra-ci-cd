@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       deployment_name:
-        description: 'Nome do deployment (ECR repo e ECS service)'
+        description: 'Nome do deployment (ECS service)'
         required: true
         type: string
       service_type:
@@ -73,11 +73,6 @@ on:
         required: false
         type: string
         default: ''
-      ecr_repository:
-        description: 'Nome do repositório ECR (vazio = deployment_name)'
-        required: false
-        type: string
-        default: ''
       # --- ECS / Fargate: task definition e rede ---
       ecs_task_execution_role_arn:
         description: 'ARN da role de execução da task (obrigatório para criar/registrar task definition)'
@@ -99,11 +94,6 @@ on:
         required: false
         type: string
         default: '512'
-      vpc_id:
-        description: 'ID da VPC (para create-service; opcional se usar secret)'
-        required: false
-        type: string
-        default: ''
       subnet_ids:
         description: 'IDs das subnets separados por vírgula (ex.: subnet-1,subnet-2)'
         required: false
@@ -130,16 +120,6 @@ on:
         required: false
         type: string
         default: ''
-      load_balancer_name:
-        description: 'Nome do LB (referência/documentação; ex.: invoisys.com.br)'
-        required: false
-        type: string
-        default: ''
-      listener_path_pattern:
-        description: 'Path(s) no listener (referência; ex.: /api/nfe/* ou /api/nfe/*,/api/cte/*)'
-        required: false
-        type: string
-        default: ''
       container_name:
         description: 'Nome do container na task definition (para mapear ao LB; default: app)'
         required: false
@@ -150,6 +130,93 @@ on:
         required: false
         type: string
         default: '80'
+      # --- Task definition: environment, secrets, runtime, log ---
+      container_environment:
+        description: 'JSON array de variáveis de ambiente [{ "name": "X", "value": "Y" }]; vazio = nenhuma'
+        required: false
+        type: string
+        default: ''
+      container_secrets:
+        description: 'JSON array de secrets (Secrets Manager) [{ "name": "X", "valueFrom": "arn:..." }]; vazio = nenhum'
+        required: false
+        type: string
+        default: ''
+      runtime_cpu_architecture:
+        description: 'CPU da plataforma (X86_64, ARM64); vazio = default Fargate'
+        required: false
+        type: string
+        default: ''
+      runtime_os_family:
+        description: 'OS da plataforma (LINUX, WINDOWS_SERVER_2019_CORE); vazio = default'
+        required: false
+        type: string
+        default: ''
+      awslogs_mode:
+        description: 'Modo awslogs (non-blocking ou blocking); vazio = não define'
+        required: false
+        type: string
+        default: ''
+      awslogs_create_group:
+        description: 'Criar log group se não existir (true/false); vazio = não define'
+        required: false
+        type: string
+        default: ''
+      awslogs_max_buffer_size:
+        description: 'Tamanho máximo do buffer (ex.: 25m); vazio = não define'
+        required: false
+        type: string
+        default: ''
+      port_mapping_app_protocol:
+        description: 'appProtocol do portMapping (ex.: http); vazio = não define'
+        required: false
+        type: string
+        default: ''
+      # --- Service: rebalanceamento, circuit breaker, capacity provider, ECS Exec ---
+      enable_zone_rebalancing:
+        description: 'Ativar rebalanceamento de zonas de disponibilidade (true/false)'
+        required: false
+        type: boolean
+        default: false
+      health_check_grace_period_seconds:
+        description: 'Período de carência do health check em segundos (0 ou positivo)'
+        required: false
+        type: string
+        default: ''
+      deployment_circuit_breaker_enable:
+        description: 'Habilitar disjuntor de implantação (falha automática do deploy)'
+        required: false
+        type: boolean
+        default: false
+      deployment_circuit_breaker_rollback:
+        description: 'Fazer rollback automático quando o disjuntor disparar (requer enable)'
+        required: false
+        type: boolean
+        default: false
+      capacity_provider_strategy:
+        description: 'Estratégia de capacity providers (ex.: FARGATE=1,FARGATE_SPOT=4 ou JSON); vazio = launch-type FARGATE'
+        required: false
+        type: string
+        default: ''
+      platform_version:
+        description: 'Versão da plataforma Fargate (ex.: 1.4.0); vazio = default AWS'
+        required: false
+        type: string
+        default: ''
+      enable_execute_command:
+        description: 'Ativar ECS Exec (comandos interativos no container)'
+        required: false
+        type: boolean
+        default: false
+      deployment_minimum_healthy_percent:
+        description: 'Mínimo % de tarefas saudáveis durante deploy (ex.: 100); vazio = default AWS'
+        required: false
+        type: string
+        default: ''
+      deployment_maximum_percent:
+        description: 'Máximo % de tarefas durante deploy (ex.: 200); vazio = default AWS'
+        required: false
+        type: string
+        default: ''
       # --- Fim ECS/LB ---
       enable_health_check:
         description: 'Executar health check HTTP pós-deploy (opcional)'
@@ -214,9 +281,8 @@ jobs:
             inbound|outbound|platform) echo "✅ Contexto válido: $CTX" ;;
             *) echo "❌ Contexto inválido: $CTX"; exit 1 ;;
           esac
-          ECR_REPO="${{ inputs.ecr_repository }}"
-          [ -z "$ECR_REPO" ] && ECR_REPO="${{ inputs.deployment_name }}"
-          echo "ecr_repository=${ECR_REPO}" >> $GITHUB_OUTPUT
+          # Nome do repositório ECR = context (inbound, outbound ou platform)
+          echo "ecr_repository=${CTX}" >> $GITHUB_OUTPUT
           echo "ecr_registry=${{ inputs.ecr_registry }}" >> $GITHUB_OUTPUT
           SERVICE_NAME="${{ inputs.ecs_service }}"
           [ -z "$SERVICE_NAME" ] && SERVICE_NAME="${{ inputs.deployment_name }}"
@@ -331,6 +397,23 @@ jobs:
           TARGET_GROUP_ARN: ${{ inputs.load_balancer_target_group_arn }}
           SERVICE_TYPE: ${{ inputs.service_type }}
           AWS_REGION: ${{ inputs.aws_region }}
+          CONTAINER_ENVIRONMENT: ${{ inputs.container_environment }}
+          CONTAINER_SECRETS: ${{ inputs.container_secrets }}
+          RUNTIME_CPU: ${{ inputs.runtime_cpu_architecture }}
+          RUNTIME_OS: ${{ inputs.runtime_os_family }}
+          AWSLOGS_MODE: ${{ inputs.awslogs_mode }}
+          AWSLOGS_CREATE_GROUP: ${{ inputs.awslogs_create_group }}
+          AWSLOGS_MAX_BUFFER: ${{ inputs.awslogs_max_buffer_size }}
+          PORT_APP_PROTOCOL: ${{ inputs.port_mapping_app_protocol }}
+          ENABLE_ZONE_REBALANCING: ${{ inputs.enable_zone_rebalancing }}
+          HEALTH_GRACE_PERIOD: ${{ inputs.health_check_grace_period_seconds }}
+          CIRCUIT_BREAKER_ENABLE: ${{ inputs.deployment_circuit_breaker_enable }}
+          CIRCUIT_BREAKER_ROLLBACK: ${{ inputs.deployment_circuit_breaker_rollback }}
+          CAPACITY_PROVIDER_STRATEGY: ${{ inputs.capacity_provider_strategy }}
+          PLATFORM_VERSION: ${{ inputs.platform_version }}
+          ENABLE_EXEC_COMMAND: ${{ inputs.enable_execute_command }}
+          DEPLOY_MIN_HEALTHY: ${{ inputs.deployment_minimum_healthy_percent }}
+          DEPLOY_MAX_PERCENT: ${{ inputs.deployment_maximum_percent }}
         run: |
           set -e
           FULL_IMAGE="${REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
@@ -339,72 +422,156 @@ jobs:
             echo "❌ ECS cluster e service são obrigatórios (inputs ecs_cluster/ecs_service ou secrets ECS_CLUSTER/ECS_SERVICE)"
             exit 1
           fi
-          if [ -z "$TASK_EXEC_ROLE" ]; then
-            echo "❌ Role de execução obrigatória (input ecs_task_execution_role_arn ou secret ECS_TASK_EXECUTION_ROLE_ARN)"
-            exit 1
-          fi
 
-          # Família da task definition = nome do service (revisões acumulam por deploy; facilita rollback)
-          TASK_FAMILY="$SERVICE"
-          LOG_GROUP="/ecs/${TASK_FAMILY}"
-          PORT_NUM=$(echo "$CONTAINER_PORT" | grep -E '^[0-9]+$' || echo "80")
-
-          # Montar containerDefinitions (porta e nome para LB quando API)
-          CONTAINER_DEF=$(jq -n \
-            --arg name "$CONTAINER_NAME" \
-            --arg image "$FULL_IMAGE" \
-            --argjson port "$PORT_NUM" \
-            --arg lg "$LOG_GROUP" \
-            --arg region "$AWS_REGION" \
-            '{
-              name: $name,
-              image: $image,
-              portMappings: [{ containerPort: $port, protocol: "tcp" }],
-              logConfiguration: {
-                logDriver: "awslogs",
-                options: {
-                  "awslogs-group": $lg,
-                  "awslogs-region": $region,
-                  "awslogs-stream-prefix": "ecs"
-                }
-              },
-              essential: true
-            }')
-
-          # Montar task definition completa (Fargate)
-          TASK_DEF_JSON=$(jq -n \
-            --arg family "$TASK_FAMILY" \
-            --arg execRole "$TASK_EXEC_ROLE" \
-            --arg taskRole "$TASK_ROLE" \
-            --arg cpu "${{ inputs.task_cpu || '256' }}" \
-            --arg memory "${{ inputs.task_memory || '512' }}" \
-            --argjson container "$CONTAINER_DEF" \
-            '{
-              family: $family,
-              networkMode: "awsvpc",
-              requiresCompatibilities: ["FARGATE"],
-              cpu: $cpu,
-              memory: $memory,
-              executionRoleArn: $execRole,
-              containerDefinitions: [$container]
-            } | if $taskRole != "" then . + {taskRoleArn: $taskRole} else . end')
-
-          echo "📝 Registrando nova revisão da task definition..."
-          NEW_TASK_ARN=$(echo "$TASK_DEF_JSON" | aws ecs register-task-definition --cli-input-json file:///dev/stdin --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
-          echo "✅ Task definition: $NEW_TASK_ARN"
-
-          # Verificar se o service já existe no cluster
+          # Verificar se o service já existe (define fluxo: reutilizar task def vs criar do zero)
           EXISTING=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[?status==`ACTIVE`]' --output json)
           SERVICE_EXISTS=$(echo "$EXISTING" | jq 'length > 0')
 
           if [ "$SERVICE_EXISTS" = "true" ]; then
-            echo "🔄 Service já existe: atualizando com nova task definition..."
-            aws ecs update-service \
+            # --- Service existe: reutilizar task definition atual, trocar só imagem e environment (se informado) ---
+            echo "🔄 Service já existe: reutilizando task definition e trocando imagem (e environment se informado)..."
+            if [ -z "$TASK_EXEC_ROLE" ]; then
+              echo "⚠️ Role de execução não informada; task definition atual será preservada (incl. executionRoleArn)"
+            fi
+            CURRENT_TASK_ARN=$(echo "$EXISTING" | jq -r '.[0].taskDefinition')
+            TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition "$CURRENT_TASK_ARN" --query 'taskDefinition' --output json)
+            # Remover campos read-only para re-registro
+            TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+            # Trocar imagem do primeiro container
+            TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --arg img "$FULL_IMAGE" '.containerDefinitions[0].image = $img')
+            # Se container_environment foi informado, substituir environment do primeiro container
+            if [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ]; then
+              if echo "$CONTAINER_ENVIRONMENT" | jq -e . >/dev/null 2>&1; then
+                TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson env "$CONTAINER_ENVIRONMENT" '.containerDefinitions[0].environment = $env')
+                echo "📝 Atualizando environment do container com os valores informados"
+              fi
+            fi
+            echo "📝 Registrando nova revisão da task definition (imagem + environment se informado)..."
+            NEW_TASK_ARN=$(echo "$TASK_DEF_JSON" | aws ecs register-task-definition --cli-input-json file:///dev/stdin --query 'taskDefinition.taskDefinitionArn' --output text)
+            echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
+            echo "✅ Task definition: $NEW_TASK_ARN (reutilizada; imagem e env atualizados)"
+          else
+            # --- Service não existe: criar task definition do zero (obrigatório role) ---
+            if [ -z "$TASK_EXEC_ROLE" ]; then
+              echo "❌ Role de execução obrigatória (input ecs_task_execution_role_arn ou secret ECS_TASK_EXECUTION_ROLE_ARN)"
+              exit 1
+            fi
+            TASK_FAMILY="$SERVICE"
+            LOG_GROUP="/ecs/${TASK_FAMILY}"
+            PORT_NUM=$(echo "$CONTAINER_PORT" | grep -E '^[0-9]+$' || echo "80")
+
+            PORT_MAPPING=$(jq -n \
+              --arg name "${CONTAINER_NAME}-${PORT_NUM}-tcp" \
+              --argjson port "$PORT_NUM" \
+              --arg appProtocol "$PORT_APP_PROTOCOL" \
+              '{
+                name: $name,
+                containerPort: $port,
+                hostPort: $port,
+                protocol: "tcp"
+              } | if $appProtocol != "" then . + {"appProtocol": $appProtocol} else . end')
+
+            LOG_OPTS=$(jq -n \
+              --arg lg "$LOG_GROUP" \
+              --arg region "$AWS_REGION" \
+              --arg mode "$AWSLOGS_MODE" \
+              --arg createGroup "$AWSLOGS_CREATE_GROUP" \
+              --arg maxBuf "$AWSLOGS_MAX_BUFFER" \
+              '{
+                "awslogs-group": $lg,
+                "awslogs-region": $region,
+                "awslogs-stream-prefix": "ecs"
+              } | if $mode != "" then . + {"mode": $mode} else . end | if $createGroup != "" then . + {"awslogs-create-group": $createGroup} else . end | if $maxBuf != "" then . + {"max-buffer-size": $maxBuf} else . end')
+
+            CONTAINER_DEF=$(jq -n \
+              --arg name "$CONTAINER_NAME" \
+              --arg image "$FULL_IMAGE" \
+              --argjson portMapping "$PORT_MAPPING" \
+              --argjson logOpts "$LOG_OPTS" \
+              '{
+                name: $name,
+                image: $image,
+                portMappings: [$portMapping],
+                logConfiguration: { logDriver: "awslogs", options: $logOpts },
+                essential: true
+              }')
+
+            if [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ]; then
+              if echo "$CONTAINER_ENVIRONMENT" | jq -e . >/dev/null 2>&1; then
+                CONTAINER_DEF=$(echo "$CONTAINER_DEF" | jq --argjson env "$CONTAINER_ENVIRONMENT" '. + {environment: $env}')
+              fi
+            fi
+            if [ -n "$CONTAINER_SECRETS" ] && [ "$CONTAINER_SECRETS" != "[]" ]; then
+              if echo "$CONTAINER_SECRETS" | jq -e . >/dev/null 2>&1; then
+                CONTAINER_DEF=$(echo "$CONTAINER_DEF" | jq --argjson secrets "$CONTAINER_SECRETS" '. + {secrets: $secrets}')
+              fi
+            fi
+
+            TASK_DEF_JSON=$(jq -n \
+              --arg family "$TASK_FAMILY" \
+              --arg execRole "$TASK_EXEC_ROLE" \
+              --arg taskRole "$TASK_ROLE" \
+              --arg cpu "${{ inputs.task_cpu || '256' }}" \
+              --arg memory "${{ inputs.task_memory || '512' }}" \
+              --argjson container "$CONTAINER_DEF" \
+              --arg runtimeCpu "$RUNTIME_CPU" \
+              --arg runtimeOs "$RUNTIME_OS" \
+              '{
+                family: $family,
+                networkMode: "awsvpc",
+                requiresCompatibilities: ["FARGATE"],
+                cpu: $cpu,
+                memory: $memory,
+                executionRoleArn: $execRole,
+                containerDefinitions: [$container]
+              } | if $taskRole != "" then . + {taskRoleArn: $taskRole} else . end | if ($runtimeCpu != "" or $runtimeOs != "") then . + {runtimePlatform: ({} | if $runtimeCpu != "" then . + {cpuArchitecture: $runtimeCpu} else . end | if $runtimeOs != "" then . + {operatingSystemFamily: $runtimeOs} else . end)} else . end')
+
+            echo "📝 Registrando nova revisão da task definition (criação do zero)..."
+            NEW_TASK_ARN=$(echo "$TASK_DEF_JSON" | aws ecs register-task-definition --cli-input-json file:///dev/stdin --query 'taskDefinition.taskDefinitionArn' --output text)
+            echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
+            echo "✅ Task definition: $NEW_TASK_ARN"
+          fi
+
+          # Parâmetros comuns para create-service e update-service (novos cenário real ECS)
+          EXTRA_UPDATE_ARGS=""
+          [ "$ENABLE_ZONE_REBALANCING" = "true" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --enable-zone-rebalancing"
+          [ -n "$HEALTH_GRACE_PERIOD" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --health-check-grace-period-seconds $HEALTH_GRACE_PERIOD"
+          if [ "$CIRCUIT_BREAKER_ENABLE" = "true" ]; then
+            EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --deployment-circuit-breaker enable=$CIRCUIT_BREAKER_ENABLE,rollback=$CIRCUIT_BREAKER_ROLLBACK"
+          fi
+          [ -n "$PLATFORM_VERSION" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --platform-version $PLATFORM_VERSION"
+          [ "$ENABLE_EXEC_COMMAND" = "true" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --enable-execute-command"
+          if [ -n "$DEPLOY_MIN_HEALTHY" ] || [ -n "$DEPLOY_MAX_PERCENT" ]; then
+            DEPLOY_CFG=""
+            [ -n "$DEPLOY_MIN_HEALTHY" ] && DEPLOY_CFG="minimumHealthyPercent=$DEPLOY_MIN_HEALTHY"
+            [ -n "$DEPLOY_MAX_PERCENT" ] && { [ -n "$DEPLOY_CFG" ] && DEPLOY_CFG="$DEPLOY_CFG,maximumPercent=$DEPLOY_MAX_PERCENT" || DEPLOY_CFG="maximumPercent=$DEPLOY_MAX_PERCENT"; }
+            [ -n "$DEPLOY_CFG" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --deployment-configuration '$DEPLOY_CFG'"
+          fi
+
+          LAUNCH_OR_CAPACITY=""
+          if [ -n "$CAPACITY_PROVIDER_STRATEGY" ]; then
+            CAP_PARTS=""
+            for part in $(echo "$CAPACITY_PROVIDER_STRATEGY" | tr ',' ' '); do
+              prov=$(echo "$part" | cut -d':' -f1)
+              base=$(echo "$part" | cut -d':' -f2)
+              weight=$(echo "$part" | cut -d':' -f3)
+              [ -z "$base" ] && base=0
+              [ -z "$weight" ] && weight=1
+              entry="capacityProvider=$prov,weight=$weight,base=$base"
+              CAP_PARTS="$CAP_PARTS \"$entry\""
+            done
+            LAUNCH_OR_CAPACITY="--capacity-provider-strategy $CAP_PARTS"
+          else
+            LAUNCH_OR_CAPACITY="--launch-type FARGATE"
+          fi
+
+          if [ "$SERVICE_EXISTS" = "true" ]; then
+            eval aws ecs update-service \
               --cluster "$CLUSTER" \
               --service "$SERVICE" \
               --task-definition "$NEW_TASK_ARN" \
               --force-new-deployment \
+              $EXTRA_UPDATE_ARGS \
               --query 'service.serviceArn' \
               --output text
           else
@@ -428,25 +595,27 @@ jobs:
                 --arg cn "$CONTAINER_NAME" \
                 --argjson cp "$PORT_NUM" \
                 '[{ targetGroupArn: $tg, containerName: $cn, containerPort: $cp }]')
-              aws ecs create-service \
+              eval aws ecs create-service \
                 --cluster "$CLUSTER" \
                 --service-name "$SERVICE" \
                 --task-definition "$NEW_TASK_ARN" \
                 --desired-count "$(echo "$DESIRED_COUNT" | sed 's/^0*//' || echo 1)" \
                 --network-configuration "$NETWORK_CONFIG" \
                 --load-balancers "$LB_JSON" \
-                --launch-type FARGATE \
+                $EXTRA_UPDATE_ARGS \
+                $LAUNCH_OR_CAPACITY \
                 --query 'service.serviceArn' \
                 --output text
             else
               echo "📌 Worker (sem Load Balancer)"
-              aws ecs create-service \
+              eval aws ecs create-service \
                 --cluster "$CLUSTER" \
                 --service-name "$SERVICE" \
                 --task-definition "$NEW_TASK_ARN" \
                 --desired-count "$(echo "$DESIRED_COUNT" | sed 's/^0*//' || echo 1)" \
                 --network-configuration "$NETWORK_CONFIG" \
-                --launch-type FARGATE \
+                $EXTRA_UPDATE_ARGS \
+                $LAUNCH_OR_CAPACITY \
                 --query 'service.serviceArn' \
                 --output text
             fi
