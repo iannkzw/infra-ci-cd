@@ -687,7 +687,7 @@ jobs:
           if [ "$SERVICE_EXISTS" = "true" ]; then
             echo "🔄 Atualizando service..."
             CMD="aws ecs update-service --cluster $CLUSTER --service $SERVICE --task-definition $NEW_TASK_ARN --force-new-deployment"
-            [ "$ENABLE_ZONE_REBALANCING" = "true" ] && CMD="$CMD --enable-zone-rebalancing"
+            [ "$ENABLE_ZONE_REBALANCING" = "true" ] && CMD="$CMD --availability-zone-rebalancing ENABLED"
             [ -n "$HEALTH_GRACE_PERIOD" ] && CMD="$CMD --health-check-grace-period-seconds $HEALTH_GRACE_PERIOD"
             [ -n "$PLATFORM_VERSION" ] && CMD="$CMD --platform-version $PLATFORM_VERSION"
             [ "$ENABLE_EXEC_COMMAND" = "true" ] && CMD="$CMD --enable-execute-command"
