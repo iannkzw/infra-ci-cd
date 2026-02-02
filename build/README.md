@@ -29,20 +29,20 @@ Esta pasta contém Dockerfiles genéricos usados pelo pipeline quando a aplicaç
 
 ```mermaid
 flowchart TD
-    A[Novo Projeto .NET] --> B{Precisa de<br/>Dockerfile custom?}
-    
-    B -->|Não| C[use_default_dockerfile: true]
-    B -->|Sim| D[use_default_dockerfile: false]
-    
-    C --> E{Tipo de app?}
-    E -->|API/Web| F[Pipeline usa Dockerfile.api]
-    E -->|Worker/Console| G[Pipeline usa Dockerfile.worker]
-    
-    D --> H[Criar Dockerfile<br/>no repo da aplicação]
-    
-    F --> I[Build automatizado]
-    G --> I
-    H --> I
+	A[Novo Projeto .NET] --> B{Precisa de<br/>Dockerfile custom?}
+	
+	B -->|Não| C[use_default_dockerfile: true]
+	B -->|Sim| D[use_default_dockerfile: false]
+	
+	C --> E{Tipo de app?}
+	E -->|API/Web| F[Pipeline usa Dockerfile.api]
+	E -->|Worker/Console| G[Pipeline usa Dockerfile.worker]
+	
+	D --> H[Criar Dockerfile<br/>no repo da aplicação]
+	
+	F --> I[Build automatizado]
+	G --> I
+	H --> I
 ```
 
 ---
@@ -169,32 +169,32 @@ ENTRYPOINT ["/bin/sh", "-c", "exec dotnet \"$PROJECT_DLL\""]
 
 ```mermaid
 flowchart TD
-    subgraph Pipeline["GitHub Actions Pipeline"]
-        A[Checkout código<br/>da aplicação] --> B[Checkout infra-ci-cd<br/>build/Dockerfile.*]
-        B --> C{use_default_dockerfile?}
-        
-        C -->|true| D[Usar Dockerfile.api<br/>ou Dockerfile.worker]
-        C -->|false| E[Usar Dockerfile<br/>do repo da app]
-    end
-    
-    subgraph Build["Docker Build"]
-        D --> F["docker build<br/>--build-arg PROJECT_NAME=..."]
-        E --> F
-        
-        F --> G[COPY src/*.sln]
-        G --> H[COPY src/*/*.csproj]
-        H --> I[dotnet restore]
-        I --> J[COPY src/.]
-        J --> K[dotnet publish --no-restore]
-        K --> L[Imagem final]
-    end
-    
-    subgraph Push["ECR Push"]
-        L --> M["docker tag :sha"]
-        M --> N["docker tag :branch"]
-        N --> O["docker tag :timestamp"]
-        O --> P["docker push (3 tags)"]
-    end
+	subgraph Pipeline["GitHub Actions Pipeline"]
+		A[Checkout código<br/>da aplicação] --> B[Checkout infra-ci-cd<br/>build/Dockerfile.*]
+		B --> C{use_default_dockerfile?}
+		
+		C -->|true| D[Usar Dockerfile.api<br/>ou Dockerfile.worker]
+		C -->|false| E[Usar Dockerfile<br/>do repo da app]
+	end
+	
+	subgraph Build["Docker Build"]
+		D --> F["docker build<br/>--build-arg PROJECT_NAME=..."]
+		E --> F
+		
+		F --> G[COPY src/*.sln]
+		G --> H[COPY src/*/*.csproj]
+		H --> I[dotnet restore]
+		I --> J[COPY src/.]
+		J --> K[dotnet publish --no-restore]
+		K --> L[Imagem final]
+	end
+	
+	subgraph Push["ECR Push"]
+		L --> M["docker tag :sha"]
+		M --> N["docker tag :branch"]
+		N --> O["docker tag :timestamp"]
+		O --> P["docker push (3 tags)"]
+	end
 ```
 
 ### Build Context

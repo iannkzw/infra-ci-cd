@@ -76,16 +76,16 @@ GitHub Environments são **contextos isolados** para deploy que permitem:
 
 ```mermaid
 flowchart LR
-    A[Push para branch] --> B{Qual branch?}
-    B -->|dev| C[Environment: dev]
-    B -->|qa| D[Environment: qa]
-    B -->|sbx| E[Environment: sbx]
-    B -->|prd| F[Environment: prd]
-    
-    C --> G[Secrets de dev]
-    D --> H[Secrets de qa]
-    E --> I[Aprovação Required] --> J[Secrets de sbx]
-    F --> K[Aprovação Required] --> L[Secrets de prd]
+	A[Push para branch] --> B{Qual branch?}
+	B -->|dev| C[Environment: dev]
+	B -->|qa| D[Environment: qa]
+	B -->|sbx| E[Environment: sbx]
+	B -->|prd| F[Environment: prd]
+	
+	C --> G[Secrets de dev]
+	D --> H[Secrets de qa]
+	E --> I[Aprovação Required] --> J[Secrets de sbx]
+	F --> K[Aprovação Required] --> L[Secrets de prd]
 ```
 
 ---
@@ -239,32 +239,32 @@ Em cada environment, vá em **Environment secrets** e adicione:
 
 ```mermaid
 sequenceDiagram
-    participant GHA as GitHub Actions
-    participant ENV as Environment
-    participant AWS as AWS
-    participant ECR as ECR
-    participant ECS as ECS
+	participant GHA as GitHub Actions
+	participant ENV as Environment
+	participant AWS as AWS
+	participant ECR as ECR
+	participant ECS as ECS
 
-    GHA->>ENV: Solicita secrets (branch → environment)
-    ENV-->>GHA: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-    
-    GHA->>AWS: Configure credentials
-    AWS-->>GHA: Session token
-    
-    GHA->>ECR: docker login
-    ECR-->>GHA: Autenticado
-    
-    GHA->>ECR: docker push
-    ECR-->>GHA: Imagem armazenada
-    
-    GHA->>ECS: register-task-definition
-    ECS-->>GHA: Task ARN
-    
-    GHA->>ECS: update-service / create-service
-    ECS-->>GHA: Deployment iniciado
-    
-    GHA->>ECS: wait services-stable
-    ECS-->>GHA: ✅ Serviço estável
+	GHA->>ENV: Solicita secrets (branch → environment)
+	ENV-->>GHA: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+	
+	GHA->>AWS: Configure credentials
+	AWS-->>GHA: Session token
+	
+	GHA->>ECR: docker login
+	ECR-->>GHA: Autenticado
+	
+	GHA->>ECR: docker push
+	ECR-->>GHA: Imagem armazenada
+	
+	GHA->>ECS: register-task-definition
+	ECS-->>GHA: Task ARN
+	
+	GHA->>ECS: update-service / create-service
+	ECS-->>GHA: Deployment iniciado
+	
+	GHA->>ECS: wait services-stable
+	ECS-->>GHA: ✅ Serviço estável
 ```
 
 ---

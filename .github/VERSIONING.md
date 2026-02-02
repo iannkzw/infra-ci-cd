@@ -104,43 +104,43 @@ env:
 
 ```mermaid
 flowchart TD
-    subgraph GH[GitHub]
-        A[git push] --> B[Trigger Workflow]
-        B --> C[Checkout code]
-    end
-    
-    subgraph Build[Build Phase]
-        C --> D[Build .NET app]
-        D --> E[Run tests]
-        E --> F[docker build]
-    end
-    
-    subgraph Tag[Tagging Phase]
-        F --> G[Gerar tags]
-        
-        G --> H["Tag 1: {sha}<br/>abc1234"]
-        G --> I["Tag 2: {branch}<br/>prd"]
-        G --> J["Tag 3: {timestamp}<br/>20250130-143022"]
-    end
-    
-    subgraph ECR[Amazon ECR]
-        H --> K[docker push :abc1234]
-        I --> L[docker push :prd]
-        J --> M[docker push :20250130-143022]
-        
-        K --> N["Image Layer<br/>sha256:xyz..."]
-        L --> N
-        M --> N
-    end
-    
-    subgraph Deploy[Deploy Phase]
-        N --> O[Task Definition<br/>usa :abc1234]
-        O --> P[ECS Service<br/>atualizado]
-    end
-    
-    style H fill:#90EE90
-    style I fill:#FFB6C1
-    style J fill:#87CEEB
+	subgraph GH[GitHub]
+		A[git push] --> B[Trigger Workflow]
+		B --> C[Checkout code]
+	end
+	
+	subgraph Build[Build Phase]
+		C --> D[Build .NET app]
+		D --> E[Run tests]
+		E --> F[docker build]
+	end
+	
+	subgraph Tag[Tagging Phase]
+		F --> G[Gerar tags]
+		
+		G --> H["Tag 1: {sha}<br/>abc1234"]
+		G --> I["Tag 2: {branch}<br/>prd"]
+		G --> J["Tag 3: {timestamp}<br/>20250130-143022"]
+	end
+	
+	subgraph ECR[Amazon ECR]
+		H --> K[docker push :abc1234]
+		I --> L[docker push :prd]
+		J --> M[docker push :20250130-143022]
+		
+		K --> N["Image Layer<br/>sha256:xyz..."]
+		L --> N
+		M --> N
+	end
+	
+	subgraph Deploy[Deploy Phase]
+		N --> O[Task Definition<br/>usa :abc1234]
+		O --> P[ECS Service<br/>atualizado]
+	end
+	
+	style H fill:#90EE90
+	style I fill:#FFB6C1
+	style J fill:#87CEEB
 ```
 
 ### Linha do Tempo de Releases

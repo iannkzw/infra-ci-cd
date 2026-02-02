@@ -134,42 +134,42 @@ Para **sbx** e **prd**:
 
 ```mermaid
 flowchart TD
-    A[🚨 Problema Detectado] --> B{Severidade?}
-    
-    B -->|Crítica| C[Rollback Imediato]
-    B -->|Alta| D{Hotfix possível<br/>em < 30min?}
-    B -->|Média/Baixa| E[Avaliar impacto]
-    
-    D -->|Sim| F[Aplicar Hotfix]
-    D -->|Não| C
-    
-    E --> G{Impacta usuários?}
-    G -->|Sim| D
-    G -->|Não| H[Agendar correção]
-    
-    C --> I[Identificar versão<br/>estável anterior]
-    I --> J[Executar workflow<br/>Rollback ECS]
-    
-    J --> K{Ambiente é<br/>sbx/prd?}
-    K -->|Sim| L[Aguardar aprovação]
-    K -->|Não| M[Execução direta]
-    
-    L --> N[Reviewer aprova]
-    N --> M
-    
-    M --> O[Rollback executado]
-    O --> P[Verificar estabilidade]
-    
-    P --> Q{Service estável?}
-    Q -->|Sim| R[✅ Rollback concluído]
-    Q -->|Não| S[⚠️ Escalar para time]
-    
-    S --> T{Tentar outra<br/>versão?}
-    T -->|Sim| I
-    T -->|Não| U[🔴 Incidente crítico]
-    
-    F --> V[Deploy via pipeline]
-    V --> P
+	A[🚨 Problema Detectado] --> B{Severidade?}
+	
+	B -->|Crítica| C[Rollback Imediato]
+	B -->|Alta| D{Hotfix possível<br/>em < 30min?}
+	B -->|Média/Baixa| E[Avaliar impacto]
+	
+	D -->|Sim| F[Aplicar Hotfix]
+	D -->|Não| C
+	
+	E --> G{Impacta usuários?}
+	G -->|Sim| D
+	G -->|Não| H[Agendar correção]
+	
+	C --> I[Identificar versão<br/>estável anterior]
+	I --> J[Executar workflow<br/>Rollback ECS]
+	
+	J --> K{Ambiente é<br/>sbx/prd?}
+	K -->|Sim| L[Aguardar aprovação]
+	K -->|Não| M[Execução direta]
+	
+	L --> N[Reviewer aprova]
+	N --> M
+	
+	M --> O[Rollback executado]
+	O --> P[Verificar estabilidade]
+	
+	P --> Q{Service estável?}
+	Q -->|Sim| R[✅ Rollback concluído]
+	Q -->|Não| S[⚠️ Escalar para time]
+	
+	S --> T{Tentar outra<br/>versão?}
+	T -->|Sim| I
+	T -->|Não| U[🔴 Incidente crítico]
+	
+	F --> V[Deploy via pipeline]
+	V --> P
 ```
 
 ---
