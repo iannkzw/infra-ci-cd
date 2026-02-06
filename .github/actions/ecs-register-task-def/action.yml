@@ -1,0 +1,178 @@
+name: 'ECS Register Task Definition'
+description: 'Register or update ECS Task Definition'
+
+inputs:
+  ecs_cluster:
+    description: 'Nome do cluster ECS'
+    required: true
+  ecs_service:
+    description: 'Nome do service ECS (também usado como family name)'
+    required: true
+  image_uri:
+    description: 'URI completa da imagem (registry/repo:tag)'
+    required: true
+  task_execution_role_arn:
+    description: 'ARN da role de execução da task'
+    required: true
+  task_role_arn:
+    description: 'ARN da role da task (opcional)'
+    required: false
+    default: ''
+  task_cpu:
+    description: 'CPU para Fargate (256, 512, 1024, 2048, 4096)'
+    required: false
+    default: '256'
+  task_memory:
+    description: 'Memória em MB para Fargate'
+    required: false
+    default: '512'
+  container_name:
+    description: 'Nome do container'
+    required: false
+    default: 'app'
+  container_port:
+    description: 'Porta do container'
+    required: false
+    default: '80'
+  container_environment:
+    description: 'JSON array de variáveis de ambiente'
+    required: false
+    default: ''
+  container_secrets:
+    description: 'JSON array de secrets'
+    required: false
+    default: ''
+  aws_region:
+    description: 'Região AWS'
+    required: false
+    default: 'us-east-1'
+  runtime_cpu_architecture:
+    description: 'CPU da plataforma (X86_64, ARM64)'
+    required: false
+    default: ''
+  runtime_os_family:
+    description: 'OS da plataforma (LINUX, WINDOWS_SERVER_2019_CORE)'
+    required: false
+    default: ''
+  awslogs_mode:
+    description: 'Modo awslogs (non-blocking ou blocking)'
+    required: false
+    default: ''
+  awslogs_create_group:
+    description: 'Criar log group se não existir'
+    required: false
+    default: ''
+  awslogs_max_buffer_size:
+    description: 'Tamanho máximo do buffer'
+    required: false
+    default: ''
+  port_mapping_app_protocol:
+    description: 'appProtocol do portMapping'
+    required: false
+    default: ''
+
+outputs:
+  task_definition_arn:
+    description: 'ARN da task definition registrada'
+    value: ${{ steps.register.outputs.task_definition_arn }}
+  service_exists:
+    description: 'Se o service ECS já existe'
+    value: ${{ steps.register.outputs.service_exists }}
+  task_definition_family:
+    description: 'Family da task definition'
+    value: ${{ steps.register.outputs.task_definition_family }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Register Task Definition
+      id: register
+      shell: bash
+      env:
+        CLUSTER: ${{ inputs.ecs_cluster }}
+        SERVICE: ${{ inputs.ecs_service }}
+        IMAGE_URI: ${{ inputs.image_uri }}
+        TASK_EXEC_ROLE: ${{ inputs.task_execution_role_arn }}
+        TASK_ROLE: ${{ inputs.task_role_arn }}
+        CONTAINER_NAME: ${{ inputs.container_name }}
+        CONTAINER_PORT: ${{ inputs.container_port }}
+        AWS_REGION: ${{ inputs.aws_region }}
+        TASK_CPU: ${{ inputs.task_cpu }}
+        TASK_MEMORY: ${{ inputs.task_memory }}
+        CONTAINER_ENVIRONMENT: ${{ inputs.container_environment }}
+        CONTAINER_SECRETS: ${{ inputs.container_secrets }}
+        RUNTIME_CPU: ${{ inputs.runtime_cpu_architecture }}
+        RUNTIME_OS: ${{ inputs.runtime_os_family }}
+        AWSLOGS_MODE: ${{ inputs.awslogs_mode }}
+        AWSLOGS_CREATE_GROUP: ${{ inputs.awslogs_create_group }}
+        AWSLOGS_MAX_BUFFER: ${{ inputs.awslogs_max_buffer_size }}
+        PORT_APP_PROTOCOL: ${{ inputs.port_mapping_app_protocol }}
+      run: |
+        set -e
+        echo "🖼️ Imagem: $IMAGE_URI"
+        
+        # Verificar se service existe
+        EXISTING=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[?status==`ACTIVE`]' --output json)
+        SERVICE_EXISTS=$(echo "$EXISTING" | jq 'length > 0')
+        echo "service_exists=${SERVICE_EXISTS}" >> $GITHUB_OUTPUT
+        echo "task_definition_family=${SERVICE}" >> $GITHUB_OUTPUT
+        
+        if [ "$SERVICE_EXISTS" = "true" ]; then
+          echo "🔄 Service existe: reutilizando task definition..."
+          CURRENT_TASK_ARN=$(echo "$EXISTING" | jq -r '.[0].taskDefinition')
+          TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition "$CURRENT_TASK_ARN" --query 'taskDefinition' --output json)
+          TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+          TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --arg img "$IMAGE_URI" '.containerDefinitions[0].image = $img')
+          if [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ]; then
+            echo "$CONTAINER_ENVIRONMENT" | jq -e . >/dev/null 2>&1 && \
+            TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson env "$CONTAINER_ENVIRONMENT" '.containerDefinitions[0].environment = $env')
+          fi
+        else
+          echo "🆕 Service não existe: criando task definition do zero..."
+          [ -z "$TASK_EXEC_ROLE" ] && echo "❌ Role de execução obrigatória" && exit 1
+          
+          PORT_NUM=$(echo "$CONTAINER_PORT" | grep -E '^[0-9]+$' || echo "80")
+          LOG_GROUP="/ecs/${SERVICE}"
+          
+          # Port mapping
+          PORT_MAPPING=$(jq -n --arg name "${CONTAINER_NAME}-${PORT_NUM}-tcp" --argjson port "$PORT_NUM" \
+            '{name:$name,containerPort:$port,hostPort:$port,protocol:"tcp"}')
+          [ -n "$PORT_APP_PROTOCOL" ] && PORT_MAPPING=$(echo "$PORT_MAPPING" | jq --arg p "$PORT_APP_PROTOCOL" '.+{appProtocol:$p}')
+          
+          # Log opts
+          LOG_OPTS=$(jq -n --arg lg "$LOG_GROUP" --arg r "$AWS_REGION" '{"awslogs-group":$lg,"awslogs-region":$r,"awslogs-stream-prefix":"ecs"}')
+          [ -n "$AWSLOGS_MODE" ] && LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg m "$AWSLOGS_MODE" '.+{mode:$m}')
+          [ -n "$AWSLOGS_CREATE_GROUP" ] && LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg c "$AWSLOGS_CREATE_GROUP" '.+{"awslogs-create-group":$c}')
+          [ -n "$AWSLOGS_MAX_BUFFER" ] && LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg b "$AWSLOGS_MAX_BUFFER" '.+{"max-buffer-size":$b}')
+          
+          # Container def
+          CONTAINER_DEF=$(jq -n --arg n "$CONTAINER_NAME" --arg img "$IMAGE_URI" --argjson pm "$PORT_MAPPING" --argjson lo "$LOG_OPTS" \
+            '{name:$n,image:$img,portMappings:[$pm],logConfiguration:{logDriver:"awslogs",options:$lo},essential:true}')
+          [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ] && \
+            echo "$CONTAINER_ENVIRONMENT" | jq -e . >/dev/null 2>&1 && \
+            CONTAINER_DEF=$(echo "$CONTAINER_DEF" | jq --argjson e "$CONTAINER_ENVIRONMENT" '.+{environment:$e}')
+          [ -n "$CONTAINER_SECRETS" ] && [ "$CONTAINER_SECRETS" != "[]" ] && \
+            echo "$CONTAINER_SECRETS" | jq -e . >/dev/null 2>&1 && \
+            CONTAINER_DEF=$(echo "$CONTAINER_DEF" | jq --argjson s "$CONTAINER_SECRETS" '.+{secrets:$s}')
+          
+          # Task def
+          TASK_DEF_JSON=$(jq -n --arg f "$SERVICE" --arg er "$TASK_EXEC_ROLE" --arg cpu "$TASK_CPU" --arg mem "$TASK_MEMORY" --argjson c "$CONTAINER_DEF" \
+            '{family:$f,networkMode:"awsvpc",requiresCompatibilities:["FARGATE"],cpu:$cpu,memory:$mem,executionRoleArn:$er,containerDefinitions:[$c]}')
+          [ -n "$TASK_ROLE" ] && TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --arg tr "$TASK_ROLE" '.+{taskRoleArn:$tr}')
+          
+          # Runtime platform
+          if [ -n "$RUNTIME_CPU" ] || [ -n "$RUNTIME_OS" ]; then
+            RT=$(jq -n '{}')
+            [ -n "$RUNTIME_CPU" ] && RT=$(echo "$RT" | jq --arg c "$RUNTIME_CPU" '.+{cpuArchitecture:$c}')
+            [ -n "$RUNTIME_OS" ] && RT=$(echo "$RT" | jq --arg o "$RUNTIME_OS" '.+{operatingSystemFamily:$o}')
+            TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson rt "$RT" '.+{runtimePlatform:$rt}')
+          fi
+        fi
+        
+        # Register task definition
+        TASK_DEF_FILE=$(mktemp)
+        echo "$TASK_DEF_JSON" > "$TASK_DEF_FILE"
+        NEW_TASK_ARN=$(aws ecs register-task-definition --cli-input-json "file://${TASK_DEF_FILE}" --query 'taskDefinition.taskDefinitionArn' --output text)
+        rm -f "$TASK_DEF_FILE"
+        echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
+        echo "✅ Task definition: $NEW_TASK_ARN"

@@ -1,0 +1,187 @@
+name: Reusable Build Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      # ========== BUILD RUNTIME ==========
+      runtime:
+        description: 'Runtime/linguagem do projeto (dotnet, nodejs, java, go, python, custom)'
+        required: false
+        type: string
+        default: 'dotnet'
+      
+      # ========== .NET CONFIG ==========
+      dotnet_version:
+        description: 'Versão do .NET SDK (para runtime=dotnet)'
+        required: false
+        type: string
+        default: '8.0'
+      
+      # ========== NODE.JS CONFIG ==========
+      node_version:
+        description: 'Versão do Node.js (para runtime=nodejs)'
+        required: false
+        type: string
+        default: '20'
+      
+      # ========== COMMON CONFIG ==========
+      working_directory:
+        description: 'Diretório do código fonte'
+        required: false
+        type: string
+        default: 'src'
+      run_tests:
+        description: 'Executar testes'
+        required: false
+        type: boolean
+        default: true
+      
+      # ========== DOCKER CONFIG ==========
+      ecr_repo:
+        description: 'Nome do repositório ECR'
+        required: true
+        type: string
+      ecr_registry:
+        description: 'URL do registry ECR'
+        required: false
+        type: string
+        default: ''
+      dockerfile_path:
+        description: 'Caminho do Dockerfile'
+        required: false
+        type: string
+        default: ''
+      service_type:
+        description: 'Tipo de serviço para selecionar Dockerfile padrão (api, worker)'
+        required: false
+        type: string
+        default: 'api'
+      use_default_dockerfile:
+        description: 'Usar Dockerfile do repo de templates'
+        required: false
+        type: boolean
+        default: true
+      templates_repo:
+        description: 'Repositório dos templates (ex: org/repo)'
+        required: false
+        type: string
+        default: ''
+      templates_ref:
+        description: 'Branch/tag do repo de templates'
+        required: false
+        type: string
+        default: 'main'
+      project_name:
+        description: 'Nome do projeto (usado como build-arg)'
+        required: false
+        type: string
+        default: ''
+      build_args:
+        description: 'Build args adicionais (KEY=VALUE, um por linha)'
+        required: false
+        type: string
+        default: ''
+      aws_region:
+        description: 'Região AWS'
+        required: false
+        type: string
+        default: 'us-east-1'
+      
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      REPO_ACCESS_TOKEN:
+        required: false
+        
+    outputs:
+      image_uri:
+        description: 'URI completa da imagem Docker'
+        value: ${{ jobs.build.outputs.image_uri }}
+      image_digest:
+        description: 'Digest da imagem'
+        value: ${{ jobs.build.outputs.image_digest }}
+      image_tag:
+        description: 'Tag da imagem'
+        value: ${{ jobs.build.outputs.image_tag }}
+      registry:
+        description: 'Registry ECR'
+        value: ${{ jobs.build.outputs.registry }}
+
+jobs:
+  build:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.docker-push.outputs.image_uri }}
+      image_digest: ${{ steps.docker-push.outputs.image_digest }}
+      image_tag: ${{ steps.docker-push.outputs.image_tag }}
+      registry: ${{ steps.docker-push.outputs.registry }}
+
+    steps:
+      - name: Checkout aplicação
+        uses: actions/checkout@v4
+
+      # ========== .NET BUILD ==========
+      - name: Build .NET
+        if: inputs.runtime == 'dotnet'
+        uses: ./.github/actions/dotnet-build-test
+        with:
+          dotnet_version: ${{ inputs.dotnet_version }}
+          working_directory: ${{ inputs.working_directory }}
+          run_tests: ${{ inputs.run_tests && 'true' || 'false' }}
+
+      # ========== NODE.JS BUILD ==========
+      - name: Setup Node.js
+        if: inputs.runtime == 'nodejs'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+          cache-dependency-path: '${{ inputs.working_directory }}/package-lock.json'
+
+      - name: Install and Test (Node.js)
+        if: inputs.runtime == 'nodejs'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          npm ci
+          if [ "${{ inputs.run_tests }}" = "true" ]; then
+            npm test
+          fi
+
+      # ========== DOCKER TEMPLATES ==========
+      - name: Checkout templates
+        if: inputs.use_default_dockerfile && inputs.templates_repo != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.templates_repo }}
+          ref: ${{ inputs.templates_ref }}
+          path: .ci-templates
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Definir Dockerfile
+        id: dockerfile
+        run: |
+          if [ "${{ inputs.use_default_dockerfile }}" = "true" ] && [ -n "${{ inputs.templates_repo }}" ]; then
+            echo "path=.ci-templates/build/Dockerfile.${{ inputs.service_type }}" >> $GITHUB_OUTPUT
+          else
+            DF="${{ inputs.dockerfile_path }}"
+            [ -z "$DF" ] && DF="Dockerfile.${{ inputs.service_type }}"
+            echo "path=${DF}" >> $GITHUB_OUTPUT
+          fi
+
+      # ========== DOCKER BUILD & PUSH ==========
+      - name: Build and Push Docker
+        id: docker-push
+        uses: ./.github/actions/docker-build-push-ecr
+        with:
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_region: ${{ inputs.aws_region }}
+          ecr_registry: ${{ inputs.ecr_registry }}
+          ecr_repo: ${{ inputs.ecr_repo }}
+          dockerfile_path: ${{ steps.dockerfile.outputs.path }}
+          build_args: |
+            ${{ inputs.project_name != '' && format('PROJECT_NAME={0}', inputs.project_name) || '' }}
+            ${{ inputs.build_args }}

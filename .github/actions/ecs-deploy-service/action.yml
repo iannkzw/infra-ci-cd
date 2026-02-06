@@ -1,0 +1,222 @@
+name: 'ECS Deploy Service'
+description: 'Create or update ECS Service and wait for stabilization'
+
+inputs:
+  ecs_cluster:
+    description: 'Nome do cluster ECS'
+    required: true
+  ecs_service:
+    description: 'Nome do service ECS'
+    required: true
+  task_definition_arn:
+    description: 'ARN da task definition'
+    required: true
+  service_exists:
+    description: 'Se o service já existe (true/false)'
+    required: true
+  service_type:
+    description: 'Tipo de serviço (api ou worker)'
+    required: false
+    default: 'worker'
+  target_group_arn:
+    description: 'ARN do target group (obrigatório para API)'
+    required: false
+    default: ''
+  container_name:
+    description: 'Nome do container'
+    required: false
+    default: 'app'
+  container_port:
+    description: 'Porta do container'
+    required: false
+    default: '80'
+  subnet_ids:
+    description: 'IDs das subnets separados por vírgula'
+    required: false
+    default: ''
+  security_group_ids:
+    description: 'IDs dos security groups separados por vírgula'
+    required: false
+    default: ''
+  assign_public_ip:
+    description: 'Atribuir IP público (ENABLED/DISABLED)'
+    required: false
+    default: 'DISABLED'
+  desired_count:
+    description: 'Número desejado de tasks'
+    required: false
+    default: '1'
+  enable_zone_rebalancing:
+    description: 'Ativar rebalanceamento de zonas'
+    required: false
+    default: 'false'
+  health_check_grace_period_seconds:
+    description: 'Período de carência do health check'
+    required: false
+    default: ''
+  deployment_circuit_breaker_enable:
+    description: 'Habilitar disjuntor de implantação'
+    required: false
+    default: 'false'
+  deployment_circuit_breaker_rollback:
+    description: 'Rollback automático quando disjuntor disparar'
+    required: false
+    default: 'false'
+  capacity_provider_strategy:
+    description: 'Estratégia de capacity providers (ex: FARGATE_SPOT:0:4,FARGATE:1:1)'
+    required: false
+    default: ''
+  platform_version:
+    description: 'Versão da plataforma Fargate'
+    required: false
+    default: ''
+  enable_execute_command:
+    description: 'Ativar ECS Exec'
+    required: false
+    default: 'false'
+  deployment_minimum_healthy_percent:
+    description: 'Mínimo % de tarefas saudáveis'
+    required: false
+    default: ''
+  deployment_maximum_percent:
+    description: 'Máximo % de tarefas durante deploy'
+    required: false
+    default: ''
+  wait_for_stable:
+    description: 'Aguardar estabilização do service'
+    required: false
+    default: 'true'
+
+outputs:
+  service_arn:
+    description: 'ARN do service ECS'
+    value: ${{ steps.finalize.outputs.service_arn }}
+  deployment_id:
+    description: 'ID do deployment'
+    value: ${{ steps.deploy.outputs.deployment_id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Deploy ECS Service
+      id: deploy
+      shell: bash
+      env:
+        CLUSTER: ${{ inputs.ecs_cluster }}
+        SERVICE: ${{ inputs.ecs_service }}
+        NEW_TASK_ARN: ${{ inputs.task_definition_arn }}
+        SERVICE_EXISTS: ${{ inputs.service_exists }}
+        SERVICE_TYPE: ${{ inputs.service_type }}
+        TARGET_GROUP_ARN: ${{ inputs.target_group_arn }}
+        CONTAINER_NAME: ${{ inputs.container_name }}
+        CONTAINER_PORT: ${{ inputs.container_port }}
+        SUBNET_IDS: ${{ inputs.subnet_ids }}
+        SECURITY_GROUPS: ${{ inputs.security_group_ids }}
+        DESIRED_COUNT: ${{ inputs.desired_count }}
+        ASSIGN_PUBLIC_IP: ${{ inputs.assign_public_ip }}
+        ENABLE_ZONE_REBALANCING: ${{ inputs.enable_zone_rebalancing }}
+        HEALTH_GRACE_PERIOD: ${{ inputs.health_check_grace_period_seconds }}
+        CIRCUIT_BREAKER_ENABLE: ${{ inputs.deployment_circuit_breaker_enable }}
+        CIRCUIT_BREAKER_ROLLBACK: ${{ inputs.deployment_circuit_breaker_rollback }}
+        CAPACITY_PROVIDER_STRATEGY: ${{ inputs.capacity_provider_strategy }}
+        PLATFORM_VERSION: ${{ inputs.platform_version }}
+        ENABLE_EXEC_COMMAND: ${{ inputs.enable_execute_command }}
+        DEPLOY_MIN_HEALTHY: ${{ inputs.deployment_minimum_healthy_percent }}
+        DEPLOY_MAX_PERCENT: ${{ inputs.deployment_maximum_percent }}
+      run: |
+        set -e
+        PORT_NUM=$(echo "$CONTAINER_PORT" | grep -E '^[0-9]+$' || echo "80")
+        
+        # Deployment config
+        DEPLOY_CFG=""
+        CFG_FILE=""
+        if [ "$CIRCUIT_BREAKER_ENABLE" = "true" ] || [ -n "$DEPLOY_MIN_HEALTHY" ] || [ -n "$DEPLOY_MAX_PERCENT" ]; then
+          CFG_FILE=$(mktemp)
+          CFG=$(jq -n '{}')
+          if [ "$CIRCUIT_BREAKER_ENABLE" = "true" ]; then
+            RB="false"; [ "$CIRCUIT_BREAKER_ROLLBACK" = "true" ] && RB="true"
+            CFG=$(echo "$CFG" | jq --argjson rb "$RB" '.+{deploymentCircuitBreaker:{enable:true,rollback:$rb}}')
+          fi
+          [ -n "$DEPLOY_MIN_HEALTHY" ] && CFG=$(echo "$CFG" | jq --argjson m "$DEPLOY_MIN_HEALTHY" '.+{minimumHealthyPercent:$m}')
+          [ -n "$DEPLOY_MAX_PERCENT" ] && CFG=$(echo "$CFG" | jq --argjson m "$DEPLOY_MAX_PERCENT" '.+{maximumPercent:$m}')
+          echo "$CFG" > "$CFG_FILE"
+          DEPLOY_CFG="--deployment-configuration file://${CFG_FILE}"
+        fi
+        
+        # Capacity provider
+        LAUNCH=""
+        CP_FILE=""
+        if [ -n "$CAPACITY_PROVIDER_STRATEGY" ]; then
+          CP_FILE=$(mktemp)
+          echo "[" > "$CP_FILE"
+          FIRST=true
+          IFS=',' read -ra PARTS <<< "$CAPACITY_PROVIDER_STRATEGY"
+          for part in "${PARTS[@]}"; do
+            prov=$(echo "$part"|cut -d':' -f1); base=$(echo "$part"|cut -d':' -f2); weight=$(echo "$part"|cut -d':' -f3)
+            [ -z "$base" ] && base=0; [ -z "$weight" ] && weight=1
+            [ "$FIRST" = true ] && FIRST=false || echo "," >> "$CP_FILE"
+            jq -n --arg p "$prov" --argjson w "$weight" --argjson b "$base" '{capacityProvider:$p,weight:$w,base:$b}' >> "$CP_FILE"
+          done
+          echo "]" >> "$CP_FILE"
+          LAUNCH="--capacity-provider-strategy file://${CP_FILE}"
+        else
+          LAUNCH="--launch-type FARGATE"
+        fi
+        
+        if [ "$SERVICE_EXISTS" = "true" ]; then
+          echo "🔄 Atualizando service..."
+          CMD="aws ecs update-service --cluster $CLUSTER --service $SERVICE --task-definition $NEW_TASK_ARN --force-new-deployment"
+          [ "$ENABLE_ZONE_REBALANCING" = "true" ] && CMD="$CMD --availability-zone-rebalancing ENABLED"
+          [ -n "$HEALTH_GRACE_PERIOD" ] && CMD="$CMD --health-check-grace-period-seconds $HEALTH_GRACE_PERIOD"
+          [ -n "$PLATFORM_VERSION" ] && CMD="$CMD --platform-version $PLATFORM_VERSION"
+          [ "$ENABLE_EXEC_COMMAND" = "true" ] && CMD="$CMD --enable-execute-command"
+          [ -n "$DEPLOY_CFG" ] && CMD="$CMD $DEPLOY_CFG"
+          RESULT=$($CMD --output json)
+          DEPLOYMENT_ID=$(echo "$RESULT" | jq -r '.service.deployments[0].id')
+        else
+          echo "🆕 Criando service..."
+          [ -z "$SUBNET_IDS" ] || [ -z "$SECURITY_GROUPS" ] && echo "❌ subnet_ids e security_group_ids obrigatórios" && exit 1
+          
+          SUBNETS=$(echo "$SUBNET_IDS" | tr ',' '\n' | jq -R . | jq -s .)
+          SGS=$(echo "$SECURITY_GROUPS" | tr ',' '\n' | jq -R . | jq -s .)
+          NET_FILE=$(mktemp)
+          jq -n --argjson s "$SUBNETS" --argjson g "$SGS" --arg a "$ASSIGN_PUBLIC_IP" \
+            '{awsvpcConfiguration:{subnets:$s,securityGroups:$g,assignPublicIp:$a}}' > "$NET_FILE"
+          
+          if [ "$SERVICE_TYPE" = "api" ] && [ -n "$TARGET_GROUP_ARN" ]; then
+            LB_FILE=$(mktemp)
+            jq -n --arg tg "$TARGET_GROUP_ARN" --arg cn "$CONTAINER_NAME" --argjson cp "$PORT_NUM" \
+              '[{targetGroupArn:$tg,containerName:$cn,containerPort:$cp}]' > "$LB_FILE"
+            RESULT=$(aws ecs create-service --cluster "$CLUSTER" --service-name "$SERVICE" --task-definition "$NEW_TASK_ARN" \
+              --desired-count "${DESIRED_COUNT:-1}" --network-configuration "file://${NET_FILE}" \
+              --load-balancers "file://${LB_FILE}" $LAUNCH --output json)
+            rm -f "$LB_FILE"
+          else
+            RESULT=$(aws ecs create-service --cluster "$CLUSTER" --service-name "$SERVICE" --task-definition "$NEW_TASK_ARN" \
+              --desired-count "${DESIRED_COUNT:-1}" --network-configuration "file://${NET_FILE}" \
+              $LAUNCH --output json)
+          fi
+          rm -f "$NET_FILE"
+          DEPLOYMENT_ID=$(echo "$RESULT" | jq -r '.service.deployments[0].id')
+        fi
+        
+        # Cleanup temp files
+        [ -n "$CFG_FILE" ] && rm -f "$CFG_FILE" 2>/dev/null || true
+        [ -n "$CP_FILE" ] && rm -f "$CP_FILE" 2>/dev/null || true
+        
+        echo "deployment_id=${DEPLOYMENT_ID}" >> $GITHUB_OUTPUT
+        echo "✅ Deployment iniciado: $DEPLOYMENT_ID"
+
+    - name: Wait for stabilization
+      id: finalize
+      if: inputs.wait_for_stable == 'true'
+      shell: bash
+      env:
+        CLUSTER: ${{ inputs.ecs_cluster }}
+        SERVICE: ${{ inputs.ecs_service }}
+      run: |
+        echo "⏳ Aguardando deployment estabilizar..."
+        aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+        SERVICE_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].serviceArn' --output text)
+        echo "service_arn=${SERVICE_ARN}" >> $GITHUB_OUTPUT
+        echo "✅ Deployment concluído: $SERVICE_ARN"

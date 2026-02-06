@@ -1,0 +1,75 @@
+name: '.NET Build and Test'
+description: 'Setup .NET SDK, restore packages, and run tests'
+
+inputs:
+  dotnet_version:
+    description: 'Versão do .NET SDK'
+    required: false
+    default: '8.0'
+  working_directory:
+    description: 'Diretório do código fonte'
+    required: false
+    default: 'src'
+  run_tests:
+    description: 'Executar testes unitários'
+    required: false
+    default: 'true'
+  test_filter:
+    description: 'Filtro para testes (ex: FullyQualifiedName~UnitTests)'
+    required: false
+    default: ''
+  build_configuration:
+    description: 'Configuração de build (Debug, Release)'
+    required: false
+    default: 'Release'
+
+outputs:
+  restore_cache_hit:
+    description: 'Se o cache de NuGet foi utilizado'
+    value: ${{ steps.cache-nuget.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ inputs.dotnet_version }}
+
+    - name: Cache NuGet packages
+      id: cache-nuget
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles(format('{0}/**/*.csproj', inputs.working_directory)) }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restore dependencies
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "🔄 Restaurando dependências .NET..."
+        dotnet restore
+        echo "✅ Restore concluído"
+
+    - name: Build
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "🔨 Compilando projeto..."
+        dotnet build --no-restore --configuration ${{ inputs.build_configuration }}
+        echo "✅ Build concluído"
+
+    - name: Run tests
+      if: inputs.run_tests == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "🧪 Executando testes..."
+        FILTER_ARG=""
+        if [ -n "${{ inputs.test_filter }}" ]; then
+          FILTER_ARG="--filter ${{ inputs.test_filter }}"
+        fi
+        dotnet test --no-build --configuration ${{ inputs.build_configuration }} --verbosity normal $FILTER_ARG
+        echo "✅ Testes concluídos"

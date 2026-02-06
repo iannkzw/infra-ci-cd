@@ -1,0 +1,189 @@
+name: 'ALB Target Group Setup'
+description: 'Create or get Target Group and configure Listener Rule for ALB'
+
+inputs:
+  load_balancer_arn:
+    description: 'ARN do ALB'
+    required: false
+    default: ''
+  load_balancer_name:
+    description: 'Nome do ALB existente (alternativa ao ARN)'
+    required: false
+    default: ''
+  subnet_ids:
+    description: 'IDs das subnets (para resolver VPC)'
+    required: true
+  target_group_name:
+    description: 'Nome do target group'
+    required: true
+  target_group_port:
+    description: 'Porta do target group'
+    required: false
+    default: '80'
+  target_group_protocol:
+    description: 'Protocolo do target group'
+    required: false
+    default: 'HTTP'
+  health_check_path:
+    description: 'Caminho do health check'
+    required: false
+    default: '/'
+  health_check_protocol:
+    description: 'Protocolo do health check'
+    required: false
+    default: 'HTTP'
+  deregistration_delay_seconds:
+    description: 'Deregistration delay em segundos'
+    required: false
+    default: '300'
+  listener_port:
+    description: 'Porta do listener'
+    required: false
+    default: '80'
+  listener_rule_path_pattern:
+    description: 'Path pattern para regra do listener'
+    required: false
+    default: ''
+  listener_rule_host_header:
+    description: 'Host header para regra do listener'
+    required: false
+    default: ''
+  listener_rule_priority:
+    description: 'Prioridade da regra (auto-incrementa se vazio)'
+    required: false
+    default: ''
+  service_name:
+    description: 'Nome do service (usado como fallback para path pattern)'
+    required: false
+    default: ''
+
+outputs:
+  target_group_arn:
+    description: 'ARN do target group'
+    value: ${{ steps.target-group.outputs.target_group_arn }}
+  load_balancer_arn:
+    description: 'ARN do load balancer'
+    value: ${{ steps.target-group.outputs.load_balancer_arn }}
+  listener_arn:
+    description: 'ARN do listener'
+    value: ${{ steps.listener-rule.outputs.listener_arn }}
+  listener_rule_arn:
+    description: 'ARN da regra do listener'
+    value: ${{ steps.listener-rule.outputs.listener_rule_arn }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure Target Group
+      id: target-group
+      shell: bash
+      env:
+        SUBNET_IDS: ${{ inputs.subnet_ids }}
+        TG_NAME: ${{ inputs.target_group_name }}
+        TG_PORT: ${{ inputs.target_group_port }}
+        TG_PROTOCOL: ${{ inputs.target_group_protocol }}
+        TG_HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
+        TG_HEALTH_CHECK_PROTOCOL: ${{ inputs.health_check_protocol }}
+        TG_DEREGISTRATION_DELAY: ${{ inputs.deregistration_delay_seconds }}
+        LOAD_BALANCER_ARN: ${{ inputs.load_balancer_arn }}
+        LOAD_BALANCER_NAME: ${{ inputs.load_balancer_name }}
+      run: |
+        set -e
+        [ -z "$TG_NAME" ] && echo "❌ target_group_name obrigatório" && exit 1
+        
+        # Resolver LB ARN
+        LB_ARN="$LOAD_BALANCER_ARN"
+        if [ -z "$LB_ARN" ] && [ -n "$LOAD_BALANCER_NAME" ]; then
+          LB_ARN=$(aws elbv2 describe-load-balancers --names "$LOAD_BALANCER_NAME" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || true)
+          [ -z "$LB_ARN" ] || [ "$LB_ARN" = "None" ] && echo "❌ LB '$LOAD_BALANCER_NAME' não encontrado" && exit 1
+        fi
+        [ -z "$LB_ARN" ] && echo "❌ Informe load_balancer_arn ou load_balancer_name" && exit 1
+        echo "load_balancer_arn=${LB_ARN}" >> $GITHUB_OUTPUT
+        
+        # VPC
+        FIRST_SUBNET=$(echo "$SUBNET_IDS" | cut -d',' -f1)
+        VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$FIRST_SUBNET" --query 'Subnets[0].VpcId' --output text)
+        
+        # TG existente?
+        EXISTING_TG=$(aws elbv2 describe-target-groups --names "$TG_NAME" --query 'TargetGroups[0]' --output json 2>/dev/null || echo "null")
+        if [ "$EXISTING_TG" != "null" ]; then
+          TG_ARN=$(echo "$EXISTING_TG" | jq -r '.TargetGroupArn')
+          echo "✅ TG existente: $TG_ARN"
+        else
+          echo "📝 Criando TG: $TG_NAME"
+          TG_ARN=$(aws elbv2 create-target-group \
+            --name "$TG_NAME" --protocol "${TG_PROTOCOL:-HTTP}" --port "${TG_PORT:-80}" \
+            --vpc-id "$VPC_ID" --target-type ip \
+            --health-check-path "${TG_HEALTH_CHECK_PATH:-/}" --health-check-protocol "${TG_HEALTH_CHECK_PROTOCOL:-HTTP}" \
+            --matcher "HttpCode=200-499" \
+            --query 'TargetGroups[0].TargetGroupArn' --output text)
+          echo "✅ TG criado: $TG_ARN"
+          [ -n "$TG_DEREGISTRATION_DELAY" ] && [ "$TG_DEREGISTRATION_DELAY" != "300" ] && \
+            aws elbv2 modify-target-group-attributes --target-group-arn "$TG_ARN" \
+              --attributes "Key=deregistration_delay.timeout_seconds,Value=$TG_DEREGISTRATION_DELAY"
+        fi
+        echo "target_group_arn=${TG_ARN}" >> $GITHUB_OUTPUT
+
+    - name: Configure Listener Rule
+      id: listener-rule
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service_name }}
+        LOAD_BALANCER_ARN: ${{ steps.target-group.outputs.load_balancer_arn }}
+        TARGET_GROUP_ARN: ${{ steps.target-group.outputs.target_group_arn }}
+        LISTENER_PORT: ${{ inputs.listener_port }}
+        LISTENER_RULE_PATH: ${{ inputs.listener_rule_path_pattern }}
+        LISTENER_RULE_HOST: ${{ inputs.listener_rule_host_header }}
+        LISTENER_RULE_PRIORITY: ${{ inputs.listener_rule_priority }}
+      run: |
+        set -e
+        PORT="${LISTENER_PORT:-80}"
+        
+        # Listener existente
+        LISTENER_JSON=$(aws elbv2 describe-listeners --load-balancer-arn "$LOAD_BALANCER_ARN" \
+          --query "Listeners[?Port==\`$PORT\`]" --output json | jq '.[0]')
+        [ "$LISTENER_JSON" = "null" ] && echo "❌ Listener porta $PORT não existe" && exit 1
+        LISTENER_ARN=$(echo "$LISTENER_JSON" | jq -r '.ListenerArn')
+        echo "✅ Listener: $LISTENER_ARN"
+        echo "listener_arn=${LISTENER_ARN}" >> $GITHUB_OUTPUT
+        
+        # Verificar regra existente
+        RULES=$(aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" --output json)
+        TG_RULE=$(echo "$RULES" | jq -r --arg tg "$TARGET_GROUP_ARN" '.Rules[]|select(.Actions[]?.TargetGroupArn==$tg)|.RuleArn' | head -1)
+        
+        if [ -n "$TG_RULE" ]; then
+          echo "✅ TG já associado (regra: $TG_RULE)"
+          echo "listener_rule_arn=${TG_RULE}" >> $GITHUB_OUTPUT
+        else
+          echo "📝 Criando regra no listener..."
+          # Prioridade
+          if [ -n "$LISTENER_RULE_PRIORITY" ]; then
+            PRIORITY="$LISTENER_RULE_PRIORITY"
+          else
+            MAX_P=$(echo "$RULES" | jq '[.Rules[]|select(.Priority!="default")|.Priority|tonumber]|max // 0')
+            PRIORITY=$((MAX_P + 1))
+          fi
+          
+          # Condições
+          COND_FILE=$(mktemp)
+          if [ -n "$LISTENER_RULE_HOST" ] && [ -n "$LISTENER_RULE_PATH" ]; then
+            jq -n --arg h "$LISTENER_RULE_HOST" --arg p "$LISTENER_RULE_PATH" \
+              '[{Field:"host-header",HostHeaderConfig:{Values:[$h]}},{Field:"path-pattern",PathPatternConfig:{Values:[$p]}}]' > "$COND_FILE"
+            DESC="Host:$LISTENER_RULE_HOST E Path:$LISTENER_RULE_PATH"
+          elif [ -n "$LISTENER_RULE_HOST" ]; then
+            jq -n --arg h "$LISTENER_RULE_HOST" '[{Field:"host-header",HostHeaderConfig:{Values:[$h]}}]' > "$COND_FILE"
+            DESC="Host:$LISTENER_RULE_HOST"
+          else
+            PATH="${LISTENER_RULE_PATH:-/${SERVICE}*}"
+            jq -n --arg p "$PATH" '[{Field:"path-pattern",PathPatternConfig:{Values:[$p]}}]' > "$COND_FILE"
+            DESC="Path:$PATH"
+          fi
+          
+          echo "   Prioridade: $PRIORITY | Condição: $DESC"
+          RULE_ARN=$(aws elbv2 create-rule --listener-arn "$LISTENER_ARN" --priority "$PRIORITY" \
+            --conditions "file://${COND_FILE}" --actions "Type=forward,TargetGroupArn=$TARGET_GROUP_ARN" \
+            --query 'Rules[0].RuleArn' --output text)
+          rm -f "$COND_FILE"
+          echo "✅ Regra criada: $RULE_ARN"
+          echo "listener_rule_arn=${RULE_ARN}" >> $GITHUB_OUTPUT
+        fi

@@ -1,0 +1,153 @@
+name: 'Docker Build and Push to ECR'
+description: 'Build Docker image and push to Amazon ECR with multiple tags'
+
+inputs:
+  aws_access_key_id:
+    description: 'AWS Access Key ID'
+    required: true
+  aws_secret_access_key:
+    description: 'AWS Secret Access Key'
+    required: true
+  aws_region:
+    description: 'Região AWS'
+    required: false
+    default: 'us-east-1'
+  ecr_registry:
+    description: 'URL do registry ECR (opcional, detectado automaticamente)'
+    required: false
+    default: ''
+  ecr_repo:
+    description: 'Nome do repositório ECR'
+    required: true
+  dockerfile_path:
+    description: 'Caminho do Dockerfile'
+    required: false
+    default: 'Dockerfile'
+  build_context:
+    description: 'Contexto do build Docker'
+    required: false
+    default: '.'
+  build_args:
+    description: 'Build args (formato: KEY=VALUE, um por linha)'
+    required: false
+    default: ''
+  image_tag:
+    description: 'Tag principal da imagem (default: github.sha)'
+    required: false
+    default: ''
+  additional_tags:
+    description: 'Tags adicionais separadas por vírgula'
+    required: false
+    default: ''
+  push_branch_tag:
+    description: 'Criar tag com nome da branch'
+    required: false
+    default: 'true'
+  push_timestamp_tag:
+    description: 'Criar tag com timestamp'
+    required: false
+    default: 'true'
+
+outputs:
+  image_uri:
+    description: 'URI completa da imagem (registry/repo:tag)'
+    value: ${{ steps.push.outputs.image_uri }}
+  image_digest:
+    description: 'Digest da imagem'
+    value: ${{ steps.push.outputs.image_digest }}
+  image_tag:
+    description: 'Tag principal da imagem'
+    value: ${{ steps.push.outputs.image_tag }}
+  registry:
+    description: 'Registry ECR utilizado'
+    value: ${{ steps.push.outputs.registry }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws_access_key_id }}
+        aws-secret-access-key: ${{ inputs.aws_secret_access_key }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build Docker image
+      id: build
+      shell: bash
+      env:
+        DOCKERFILE: ${{ inputs.dockerfile_path }}
+        CONTEXT: ${{ inputs.build_context }}
+        BUILD_ARGS: ${{ inputs.build_args }}
+      run: |
+        echo "🐳 Building Docker image..."
+        
+        # Preparar build args
+        ARGS=""
+        if [ -n "$BUILD_ARGS" ]; then
+          while IFS= read -r line; do
+            [ -n "$line" ] && ARGS="$ARGS --build-arg $line"
+          done <<< "$BUILD_ARGS"
+        fi
+        
+        docker build -t ci-build -f "$DOCKERFILE" $ARGS "$CONTEXT"
+        echo "✅ Build concluído"
+
+    - name: Push to ECR
+      id: push
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.ecr_registry || steps.login-ecr.outputs.registry }}
+        ECR_REPO: ${{ inputs.ecr_repo }}
+        PRIMARY_TAG: ${{ inputs.image_tag || github.sha }}
+        ADDITIONAL_TAGS: ${{ inputs.additional_tags }}
+        PUSH_BRANCH: ${{ inputs.push_branch_tag }}
+        PUSH_TIMESTAMP: ${{ inputs.push_timestamp_tag }}
+        BRANCH_NAME: ${{ github.ref_name }}
+      run: |
+        [ -z "$REGISTRY" ] && echo "❌ Registry ECR não definido" && exit 1
+        
+        IMG="${REGISTRY}/${ECR_REPO}"
+        echo "📦 Pushing to: $IMG"
+        
+        # Tag principal
+        docker tag ci-build "${IMG}:${PRIMARY_TAG}"
+        docker push "${IMG}:${PRIMARY_TAG}"
+        echo "✅ Pushed: ${IMG}:${PRIMARY_TAG}"
+        
+        # Tag branch
+        if [ "$PUSH_BRANCH" = "true" ]; then
+          docker tag ci-build "${IMG}:${BRANCH_NAME}"
+          docker push "${IMG}:${BRANCH_NAME}"
+          echo "✅ Pushed: ${IMG}:${BRANCH_NAME}"
+        fi
+        
+        # Tag timestamp
+        if [ "$PUSH_TIMESTAMP" = "true" ]; then
+          TS="$(date -u +%Y%m%d-%H%M%S)"
+          docker tag ci-build "${IMG}:${TS}"
+          docker push "${IMG}:${TS}"
+          echo "✅ Pushed: ${IMG}:${TS}"
+        fi
+        
+        # Tags adicionais
+        if [ -n "$ADDITIONAL_TAGS" ]; then
+          IFS=',' read -ra TAGS <<< "$ADDITIONAL_TAGS"
+          for tag in "${TAGS[@]}"; do
+            tag=$(echo "$tag" | xargs) # trim whitespace
+            docker tag ci-build "${IMG}:${tag}"
+            docker push "${IMG}:${tag}"
+            echo "✅ Pushed: ${IMG}:${tag}"
+          done
+        fi
+        
+        # Outputs
+        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ci-build | cut -d'@' -f2)
+        echo "image_uri=${IMG}:${PRIMARY_TAG}" >> $GITHUB_OUTPUT
+        echo "image_digest=${DIGEST}" >> $GITHUB_OUTPUT
+        echo "image_tag=${PRIMARY_TAG}" >> $GITHUB_OUTPUT
+        echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
