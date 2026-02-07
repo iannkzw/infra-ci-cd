@@ -86,6 +86,18 @@ on:
         required: false
         type: string
         default: 'us-east-1'
+
+      # ========== ACTIONS CONFIG ==========
+      actions_repo:
+        description: 'Repositório que contém as actions reutilizáveis'
+        required: false
+        type: string
+        default: 'iannkzw/infra-ci-cd'
+      actions_ref:
+        description: 'Branch/tag do repositório de actions'
+        required: false
+        type: string
+        default: 'refactor-ci-cd'
       
     secrets:
       AWS_ACCESS_KEY_ID:
@@ -123,10 +135,17 @@ jobs:
       - name: Checkout aplicação
         uses: actions/checkout@v4
 
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.actions_repo }}
+          ref: ${{ inputs.actions_ref }}
+          path: .ci-actions
+
       # ========== .NET BUILD ==========
       - name: Build .NET
         if: inputs.runtime == 'dotnet'
-        uses: ./.github/actions/dotnet-build-test
+        uses: ./.ci-actions/.github/actions/dotnet-build-test
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.working_directory }}
@@ -174,7 +193,7 @@ jobs:
       # ========== DOCKER BUILD & PUSH ==========
       - name: Build and Push Docker
         id: docker-push
-        uses: ./.github/actions/docker-build-push-ecr
+        uses: ./.ci-actions/.github/actions/docker-build-push-ecr
         with:
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

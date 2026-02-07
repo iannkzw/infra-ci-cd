@@ -251,6 +251,18 @@ on:
         required: false
         type: string
         default: ''
+
+      # ========== ACTIONS CONFIG ==========
+      actions_repo:
+        description: 'Repositório que contém as actions reutilizáveis'
+        required: false
+        type: string
+        default: 'iannkzw/infra-ci-cd'
+      actions_ref:
+        description: 'Branch/tag do repositório de actions'
+        required: false
+        type: string
+        default: 'refactor-ci-cd'
         
     secrets:
       AWS_ACCESS_KEY_ID:
@@ -296,8 +308,9 @@ jobs:
       - name: Checkout (para actions locais)
         uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
+          repository: ${{ inputs.actions_repo }}
+          ref: ${{ inputs.actions_ref }}
+          path: .ci-actions
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -309,7 +322,7 @@ jobs:
       # ========== TASK DEFINITION ==========
       - name: Register Task Definition
         id: task-def
-        uses: ./.github/actions/ecs-register-task-def
+        uses: ./.ci-actions/.github/actions/ecs-register-task-def
         with:
           ecs_cluster: ${{ inputs.ecs_cluster || secrets.ECS_CLUSTER }}
           ecs_service: ${{ inputs.ecs_service }}
@@ -334,7 +347,7 @@ jobs:
       - name: Setup ALB Target Group
         id: alb-setup
         if: inputs.service_type == 'api' && inputs.create_target_group_and_listener
-        uses: ./.github/actions/alb-target-group
+        uses: ./.ci-actions/.github/actions/alb-target-group
         with:
           load_balancer_arn: ${{ inputs.load_balancer_arn }}
           load_balancer_name: ${{ inputs.load_balancer_name }}
@@ -354,7 +367,7 @@ jobs:
       # ========== DEPLOY SERVICE ==========
       - name: Deploy ECS Service
         id: ecs-deploy
-        uses: ./.github/actions/ecs-deploy-service
+        uses: ./.ci-actions/.github/actions/ecs-deploy-service
         with:
           ecs_cluster: ${{ inputs.ecs_cluster || secrets.ECS_CLUSTER }}
           ecs_service: ${{ inputs.ecs_service }}
