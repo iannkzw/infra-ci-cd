@@ -1,13 +1,13 @@
 name: 'Docker Build and Push to ECR'
-description: 'Build Docker image and push to Amazon ECR with multiple tags'
+description: 'Build Docker image and push to Amazon ECR with multiple tags. Credenciais AWS devem ser configuradas no workflow pai usando aws-actions/configure-aws-credentials@v4.'
 
 inputs:
   aws_access_key_id:
-    description: 'AWS Access Key ID'
-    required: true
+    description: 'AWS Access Key ID (opcional quando já configurado no workflow)'
+    required: false
   aws_secret_access_key:
-    description: 'AWS Secret Access Key'
-    required: true
+    description: 'AWS Secret Access Key (opcional quando já configurado no workflow)'
+    required: false
   aws_region:
     description: 'Região AWS'
     required: false
@@ -66,6 +66,7 @@ runs:
   using: 'composite'
   steps:
     - name: Configure AWS credentials
+      if: inputs.aws_access_key_id != '' && inputs.aws_secret_access_key != ''
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ inputs.aws_access_key_id }}
